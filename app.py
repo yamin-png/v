@@ -24,7 +24,7 @@ TELEGRAM_BOT_TOKEN = "8223325004:AAEIIhDOSAOPmALWmwEHuYeaJpjlzKNGJ1k"
 ADMIN_IDS = [6616624640, 5473188537]
 
 # ⚠️ LOG GROUP ID (Where reports are sent)
-LOG_GROUP_ID = -5216721808
+LOG_GROUP_ID = -1003280360902
 
 # File to store allowed users, cookies, and usage stats
 DATA_FILE = "allowed_users.json"
