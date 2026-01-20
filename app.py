@@ -34,7 +34,18 @@ COUNTRY_OVERRIDES = {
     'RU': 'Russia', 'VN': 'Vietnam', 'KR': 'South Korea', 'IR': 'Iran',
     'MD': 'Moldova', 'TZ': 'Tanzania', 'SY': 'Syria', 'LA': 'Laos',
     'VE': 'Venezuela', 'BO': 'Bolivia', 'CD': 'Congo', 'EG': 'Egypt',
-    'MM': 'Myanmar'
+    'MM': 'Myanmar', 'US': 'United States'
+}
+
+# ⛔ BLACKLISTED COUNTRIES (Standardized English Names)
+# These names must match what pycountry or COUNTRY_OVERRIDES returns.
+FORBIDDEN_COUNTRIES = {
+    'United States', 'Peru', 'Ghana', 'Ethiopia', 'Yemen', 'Benin', 
+    'Comoros', 'Sudan', 'Zimbabwe', 'Afghanistan', 'Mali', 'Myanmar', 
+    'Ecuador', 'Tanzania', 'Togo', 'Kenya', 'Lebanon', 'Romania', 
+    'Oman', 'Bolivia', 'Bhutan', 'Georgia', 'Ukraine', 'Senegal', 
+    'Nepal', 'Sri Lanka', 'Sierra Leone', 'Russia', 'Greece', 
+    'Finland', 'Azerbaijan', 'Algeria', 'Morocco', 'Denmark', 'Malaysia'
 }
 
 DEFAULT_COOKIE = 'notice=1; notice_time=1739170824; _ga=GA1.2.907186445.1766117007; _gid=GA1.2.509279953.1766117007; _gat=1; PHPSESSID=pnca790u3m3teqi5s4na32aip9; 0878fb59c92af61fa8719cf910b34ff6=7c1cbe6f7c318625856daaded3811345d48ef7e7a%3A4%3A%7Bi%3A0%3Bs%3A6%3A%22348422%22%3Bi%3A1%3Bs%3A14%3A%22miismailhassan%22%3Bi%3A2%3Bi%3A2592000%3Bi%3A3%3Ba%3A0%3A%7B%7D%7D; loginCookie=GDK8QwXEHH; _ga_N1LC62MVC1=GS2.2.s1766206699$o6$g1$t1766206725$j34$l0$h0'
@@ -159,6 +170,22 @@ async def process_proxy_request(update_obj, country_input, context):
     # Save to user context
     context.user_data['last_country_code'] = country_input
 
+    # ⛔ CHECK FOR FORBIDDEN COUNTRY ⛔
+    if full_name in FORBIDDEN_COUNTRIES:
+        warning_text = (
+            f"🚫 **ACCESS DENIED: {full_name}**\n\n"
+            f"This is not allowed. If you try to get **{full_name}**, you will be **BANNED**.\n"
+            f"Do not make requests to this country."
+        )
+        
+        btn = InlineKeyboardMarkup([[InlineKeyboardButton("🌍 Change Country", callback_data='change_country')]])
+        
+        if is_callback:
+            await message_obj.edit_text(warning_text, parse_mode='Markdown', reply_markup=btn)
+        else:
+            await message_obj.reply_text(warning_text, parse_mode='Markdown', reply_markup=btn)
+        return
+
     # UI Feedback
     status_text = f"⏳ **Fetching {full_name} Proxy...**\nPlease wait..."
     if is_callback:
@@ -280,7 +307,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🌍 **Select Country**\n\n"
             "Please type the **2-letter Country Code** you want.\n"
-            "Examples: `EG`, `US`, `MM`, `RU`, `VN`, `BR`",
+            "Examples: `CA`, `GB`, `DE`, `FR`",
             parse_mode='Markdown'
         )
         return
@@ -328,7 +355,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(
             "🌍 **Change Country**\n\n"
             "Please type the new **Country Code** below:\n"
-            "(e.g., `MM`, `EG`, `US`)",
+            "(e.g., `CA`, `FR`, `DE`)",
             parse_mode='Markdown'
         )
         return
