@@ -7,6 +7,7 @@ import random
 import asyncio
 import datetime
 import pycountry
+from urllib.parse import unquote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, 
@@ -38,7 +39,6 @@ COUNTRY_OVERRIDES = {
 }
 
 # ⛔ BLACKLISTED COUNTRIES (Standardized English Names)
-# These names must match what pycountry or COUNTRY_OVERRIDES returns.
 FORBIDDEN_COUNTRIES = {
     'United States', 'Peru', 'Ghana', 'Ethiopia', 'Yemen', 'Benin', 
     'Comoros', 'Sudan', 'Zimbabwe', 'Afghanistan', 'Mali', 'Myanmar', 
@@ -48,8 +48,8 @@ FORBIDDEN_COUNTRIES = {
     'Finland', 'Azerbaijan', 'Algeria', 'Morocco', 'Denmark', 'Malaysia'
 }
 
-# Updated Cookie from latest log
-DEFAULT_COOKIE = '_ga=GA1.2.907186445.1766117007; _gid=GA1.2.409351101.1768402779; notice=1; notice_time=1739170824; PHPSESSID=c05e028ff8e962f21bc3cfa2b94ee4d4; 0878fb59c92af61fa8719cf910b34ff6=1e6047aef118f49bf18fa82f8ff7e03fb61bf4e9a%3A4%3A%7Bi%3A0%3Bi%3A498299%3Bi%3A1%3Bs%3A11%3A%22syaminhasan%22%3Bi%3A2%3Bi%3A2592000%3Bi%3A3%3Ba%3A0%3A%7B%7D%7D; loginCookie=KCKJX956h0; _ga_N1LC62MVC1=GS2.2.s1768978726$o67$g1$t1768978931$j60$l0$h0; cf_clearance=bnFyij3y39cvidXqCV9rCK7L0UJwjgRV0LWPAxC2DY4-1768987008-1.2.1.1-eqwzq9Zl4un2k2Jf4W4W3jLIxTnHZhA4m6DsU_YIW.wFhMG23jtD606sFj9s1wnXc7S8rOZ.WaoEmB3uFPrNkyKeerDMPtX6s79hkftk.LkvenclJ42Z39rw4IfThwS2eDtTMYRLXu0h.9Gc0twNta1BvCFMpvqmwgKLC0BEdsrlNPawZyKMdxWv1nfw.3F9ryo8Hf6.3q15BaXonm098PPkswBkl2ubCumd.3Ar0GQ; remember_user_59ba36addc2b2f9401580f014c7f58ea4e30989d=eyJpdiI6Ikx5a09seTRWQlJvWWN0alUrSmI4OXc9PSIsInZhbHVlIjoiK3ozcXhoTnNXUkdyQmU2RFVOd3M3ODIyYzF4VkRiN056WU9id3JhYzdWcTJKd2NBS0NHaFRzNy9CSWNGWnZ2T0JlR3VBMDZXMzdlL2N1VGNsNkVGQWY4T0ZndXg2ZE5BWlM2YzRsSFd6UysvUzR3UU1udUY5RHZvRThJeDgwRlU3Z0NrVmNscE40eC96Y2tTemlKRlhlOFREbDIwbVRhbTNJazUwZWRxdGZLdjRROFFMZjVBYVh4S0EwYmF2MWlsUGZYRHhPbWNSR2w5Q3NzcW1JaUI5OTZxZTJYMDJDUy9NSTI3bEZUZDUvST0iLCJtYWMiOiIwNmY1NDIwODU1OWQ3ZWFiOTM0ZmMwYjNkY2Y0M2VlMGQ3MDY5Y2JlNTNhMWIwYTIwYmFmYThmYjA5YzcwMDA2IiwidGFnIjoiIn0%3D; notice_seen=eyJpdiI6Im9PUXV6Rk5ORzNUNzNaT0FtK3FNSHc9PSIsInZhbHVlIjoidDNXcXcxSjJSU3RyNWVScURiYWFudWczUGpFNFpEbTBoSnhnbzNteDZSSFJWWVdqWFFEK3dKdnY3TkdlOE50cWdTS1QwMGE1c1JmTlNVYkZ4clQ1NUduUTNZTjEyZUxGT2dGWCtnU2gza0U9IiwibWFjIjoiYTkyNDMxMjA3MDg3M2M1ZmMyODEyNWRmMTY5OTdiZDVkMzg5NzA1MWM3YmM0YjNlM2FlMjI2MjQ0ODAyMWM5MiIsInRhZyI6IiJ9; XSRF-TOKEN=eyJpdiI6IldHWTE1WG1hYVplb0xJUVc0SWNEYlE9PSIsInZhbHVlIjoiN1dQSW5xVDZkT2hTa3BOTXZOc0JIYTJiK1hNTlJjVFUrc2VpeXZJYUUwVXMxMlJRQzlzR2dMU0UyTklubVIyTEorQzYrNUorc2NUbkxPdzFYMXM1dXh4dWY2QkZnb2tMbSs5VUxVMTZtSmdDSlFYUGU1Z211ajRSZFRUNU05V1kiLCJtYWMiOiIwMWI5YmU1M2RlNmRjZTJlMDUyYmQ5OWI0ZDFhNjQwMzIyM2IxZjg5ZWJmYjU1YmIyYTE1MzNkN2UyNzc4YzZiIiwidGFnIjoiIn0%3D; dichvusocksnet-session=eyJpdiI6IjRhbEpRUUNHazZKOWRNODlzTFk2YXc9PSIsInZhbHVlIjoiNVczSTRFS3A5cFZEZnFRemlxQ2RmdkJyV1V6UGZWVkptb3JyT01taTNLVDdOSjRXWlZ6WEd3Ym5nSEVxTm1vWkNCZjFxdVBsMkJhYlNub3FjQmhYQTkxR2lsMUxob0VENVNqRXFtSVZvbVZwWjdaVStacmN2UTZSeU9zeFZRaFgiLCJtYWMiOiIzYjYxOTdmMDQxNzliYjliMGFmZjZkYjkxZDUwYzQyNzMyYWE3MGU0NjUwNGYwNGFiZGEyZjQyMmI5ZDc3ODUzIiwidGFnIjoiIn0%3D'
+# Updated Cookie with XSRF and Session data
+DEFAULT_COOKIE = '_ga=GA1.2.907186445.1766117007; _gid=GA1.2.409351101.1768402779; notice=1; notice_time=1739170824; PHPSESSID=c05e028ff8e962f21bc3cfa2b94ee4d4; 0878fb59c92af61fa8719cf910b34ff6=1e6047aef118f49bf18fa82f8ff7e03fb61bf4e9a%3A4%3A%7Bi%3A0%3Bi%3A498299%3Bi%3A1%3Bs%3A11%3A%22syaminhasan%22%3Bi%3A2%3Bi%3A2592000%3Bi%3A3%3Ba%3A0%3A%7B%7D%7D; loginCookie=KCKJX956h0; _ga_N1LC62MVC1=GS2.2.s1768978726$o67$g1$t1768978931$j60$l0$h0; cf_clearance=bnFyij3y39cvidXqCV9rCK7L0UJwjgRV0LWPAxC2DY4-1768987008-1.2.1.1-eqwzq9Zl4un2k2Jf4W4W3jLIxTnHZhA4m6DsU_YIW.wFhMG23jtD606sFj9s1wnXc7S8rOZ.WaoEmB3uFPrNkyKeerDMPtX6s79hkftk.LkvenclJ42Z39rw4IfThwS2eDtTMYRLXu0h.9Gc0twNta1BvCFMpvqmwgKLC0BEdsrlNPawZyKMdxWv1nfw.3F9ryo8Hf6.3q15BaXonm098PPkswBkl2ubCumd.3Ar0GQ; remember_user_59ba36addc2b2f9401580f014c7f58ea4e30989d=eyJpdiI6Ikx5a09seTRWQlJvWWN0alUrSmI4OXc9PSIsInZhbHVlIjoiK3ozcXhoTnNXUkdyQmU2RFVOd3M3ODIyYzF4VkRiN056WU9id3JhYzdWcTJKd2NBS0NHaFRzNy9CSWNGWnZ2T0JlR3VBMDZXMzdlL2N1VGNsNkVGQWY4T0ZndXg2ZE5BWlM2YzRsSFd6UysvUzR3UU1udUY5RHZvRThJeDgwRlU3Z0NrVmNscE40eC96Y2tTemlKRlhlOFREbDIwbVRhbTNJazUwZWRxdGZLdjRROFFMZjVBYVh4S0EwYmF2MWlsUGZYRHhPbWNSR2w5Q3NzcW1JaUI5OTZxZTJYMDJDUy9NSTI3bEZUZDUvST0iLCJtYWMiOiIwNmY1NDIwODU1OWQ3ZWFiOTM0ZmMwYjNkY2Y0M2VlMGQ3MDY5Y2JlNTNhMWIwYTIwYmFmYThmYjA5YzcwMDA2IiwidGFnIjoiIn0%3D; notice_seen=eyJpdiI6Im9PUXV6Rk5ORzNUNzNaT0FtK3FNSHc9PSIsInZhbHVlIjoidDNXcXcxSjJSU3RyNWVScURiYWFudWczUGpFNFpEbTBoSnhnbzNteDZSSFJWWVdqWFFEK3dKdnY3TkdlOE50cWdTS1QwMGE1c1JmTlNVYkZ4clQ1NUduUTNZTjEyZUxGT2dGWCtnU2gza0U9IiwibWFjIjoiYTkyNDMxMjA3MDg3M2M1ZmMyODEyNWRmMTY5OTdiZDVkMzg5NzA1MWM3YmM0YjNlM2FlMjI2MjQ0ODAyMWM5MiIsInRhZyI6IiJ9; XSRF-TOKEN=eyJpdiI6IjZjd2NxaEJpNmk1bkJKYjVuRjZ5Vmc9PSIsInZhbHVlIjoiaHlSc1hDZU1ZbGpPQlBtV3hkZU0vTERmemJXaDkwbkFiR1Z6Nm81YkhxRDN4WGR6dUtYL3d3T280N29ZYW41WENuWUVNaVFWNUN0VGFuVTNxMVRyS0hibXh1L2FuSDNxYjlQSzByVFgwZVJGY3d5b2hCdE1YeWRuQ3VyWS9RVmUiLCJtYWMiOiI5YTAyNWQ4MzU1MjI0OThjODNhNmVkYjM2NjhiNWQxNzIyN2NhNThlNzU0NTc5MWQ4MWE0NThlZTk3ODY2MzliIiwidGFnIjoiIn0%3D; dichvusocksnet-session=eyJpdiI6Imt6dXRzRkxsWkp6L0cxdWpXT0N1RGc9PSIsInZhbHVlIjoiK0U5d1BQRnlGdzZacmZmbEp1Qm5idVAzVFVIMUZKczZyZktKL3RwZkQ5T3p3ZXRVTytrL084cnZLRFo5Q05jd1ZoVUhVUUlaYWxrelMxWkk0STArd2dMSjFoNlNENklNbitsVWpYTGl2L2RvbkozOUN0a3FaRklMWE1RVWFsVnMiLCJtYWMiOiI5NGVhOWFjZGFkYjJkNWJkNjA1NzU0ODE2NDQ1MWIwZjAyMDY1NTFmNjk2MTc1NDE0MzQwNmNiNGUyOGMzYjIxIiwidGFnIjoiIn0%3D'
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 OPR/125.0.0.0',
@@ -66,7 +66,7 @@ def load_data():
         'allowed_ids': list(ADMIN_IDS), 
         'username_map': {}, 
         'cookie': DEFAULT_COOKIE,
-        'usage': {}  # New field for tracking daily usage
+        'usage': {}
     }
     
     if not os.path.exists(DATA_FILE):
@@ -94,19 +94,31 @@ def save_data(data):
 BOT_DATA = load_data()
 HEADERS['Cookie'] = BOT_DATA['cookie']
 
+# --- HEADER HELPER (Auto XSRF) ---
+def update_headers_with_xsrf():
+    """Extracts XSRF-TOKEN from cookies and adds it to headers."""
+    cookie_str = HEADERS.get('Cookie', '')
+    match = re.search(r'XSRF-TOKEN=([^;]+)', cookie_str)
+    if match:
+        # Decode the token (it is usually URL encoded in the cookie)
+        token = unquote(match.group(1))
+        HEADERS['X-XSRF-TOKEN'] = token
+        # print("✅ XSRF-TOKEN Updated in Headers")
+
+# Initialize headers with XSRF token
+update_headers_with_xsrf()
+
 # --- USAGE TRACKER ---
 def increment_usage(user_id):
     """Increments daily usage count for a user."""
     today_str = str(datetime.date.today())
     str_id = str(user_id)
     
-    # Initialize user if not exists
     if str_id not in BOT_DATA['usage']:
         BOT_DATA['usage'][str_id] = {'date': today_str, 'count': 0}
     
     user_stat = BOT_DATA['usage'][str_id]
     
-    # Reset if date changed
     if user_stat['date'] != today_str:
         user_stat['date'] = today_str
         user_stat['count'] = 0
@@ -134,12 +146,10 @@ def _sync_fetch_proxy_id(country_full_name):
     }
 
     try:
-        # Changed to GET request with params
         response = requests.get(url, headers=HEADERS, params=params, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
-            # Changed 'data' to 'rows' based on new API structure
             proxy_list = data.get('rows', [])
             if not proxy_list: return None, "No proxies found."
             return random.choice(proxy_list)['Id'], None
@@ -148,14 +158,26 @@ def _sync_fetch_proxy_id(country_full_name):
         return None, str(e)
 
 def _sync_reveal_credentials(proxy_id):
-    url = f"https://dichvusocks.net/viewsocks&id={proxy_id}"
+    # Updated Endpoint
+    url = "https://dichvusocks.net/api/socks/view"
+    params = {'id': proxy_id}
+    
     try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        content = response.text
-        match = re.search(r'show_socks_info\(\d+,"(.*?)","(.*?)","(.*?)","(.*?)"', content)
-        if match:
-            return f"{match.group(1)}:{match.group(2)}:{match.group(3)}:{match.group(4)}", None
-        return None, "Failed to parse credentials."
+        # Added params and ensure headers have XSRF
+        response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Check for Success and Data block
+            if data.get('success') is True and 'data' in data:
+                d = data['data']
+                # Format: ip:port:username:password
+                return f"{d['ip']}:{d['port']}:{d['username']}:{d['password']}", None
+            
+            return None, "API returned success=false or missing data."
+        
+        return None, f"HTTP Error: {response.status_code}"
     except Exception as e:
         return None, str(e)
 
@@ -171,15 +193,11 @@ def get_full_country_name(code_or_name):
     return code_or_name.title()
 
 async def process_proxy_request(update_obj, country_input, context):
-    # Determine message and user
     is_callback = isinstance(update_obj, str) == False and hasattr(update_obj, 'data')
     message_obj = update_obj.message if is_callback else update_obj
     user = update_obj.from_user
     
-    # Resolve Country Name
     full_name = get_full_country_name(country_input)
-    
-    # Save to user context
     context.user_data['last_country_code'] = country_input
 
     # ⛔ CHECK FOR FORBIDDEN COUNTRY ⛔
@@ -189,7 +207,6 @@ async def process_proxy_request(update_obj, country_input, context):
             f"This is not allowed. If you try to get **{full_name}**, you will be **BANNED**.\n"
             f"Do not make requests to this country."
         )
-        
         btn = InlineKeyboardMarkup([[InlineKeyboardButton("🌍 Change Country", callback_data='change_country')]])
         
         if is_callback:
@@ -198,7 +215,6 @@ async def process_proxy_request(update_obj, country_input, context):
             await message_obj.reply_text(warning_text, parse_mode='Markdown', reply_markup=btn)
         return
 
-    # UI Feedback
     status_text = f"⏳ **Fetching {full_name} Proxy...**\nPlease wait..."
     if is_callback:
         await message_obj.edit_text(status_text, parse_mode='Markdown')
@@ -246,7 +262,6 @@ async def process_proxy_request(update_obj, country_input, context):
         f"Pass : `{password}`"
     )
 
-    # Success Buttons
     keyboard = [
         [InlineKeyboardButton(f"🔄 Get Another ({country_input.upper()})", callback_data='get_same_proxy')],
         [InlineKeyboardButton("🌍 Change Country", callback_data='change_country')]
@@ -258,12 +273,8 @@ async def process_proxy_request(update_obj, country_input, context):
     else:
         await status_msg.edit_text(final_text, parse_mode='Markdown', reply_markup=reply_markup)
 
-    # --- 4. LOGGING & USAGE TRACKING ---
     try:
-        # Increment Usage
         usage_count = increment_usage(user.id)
-        
-        # Prepare Log Message
         user_mention = f"@{user.username}" if user.username else "No Username"
         
         log_message = (
@@ -274,12 +285,10 @@ async def process_proxy_request(update_obj, country_input, context):
             f"📊 **Today Use:** {usage_count}"
         )
         
-        # Admin Ban Button
         admin_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_user_{user.id}")]
         ])
         
-        # Send to Log Group
         await context.bot.send_message(
             chat_id=LOG_GROUP_ID,
             text=log_message,
@@ -331,9 +340,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
     user_id = query.from_user.id
 
-    # --- ADMIN BAN LOGIC ---
     if action.startswith('ban_user_'):
-        # Check if clicker is admin
         if user_id not in ADMIN_IDS:
             await query.answer("❌ You are not an admin.", show_alert=True)
             return
@@ -358,7 +365,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
     
-    # Check if user is allowed (for standard buttons)
     if user_id not in BOT_DATA['allowed_ids']:
         await query.message.edit_text("🚫 Access Revoked.")
         return
@@ -408,6 +414,7 @@ async def update_cookie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         BOT_DATA['cookie'] = new_cookie
         HEADERS['Cookie'] = new_cookie
         save_data(BOT_DATA)
+        update_headers_with_xsrf() # Auto-update XSRF header
         await update.message.reply_text("✅ Cookie Updated!")
     except: await update.message.reply_text("Usage: `/new <cookie>`")
 
@@ -416,7 +423,6 @@ async def background_keep_alive():
     loop = asyncio.get_running_loop()
     while True:
         try:
-            # Updated to GET with correct endpoint and params
             await loop.run_in_executor(None, lambda: requests.get("https://dichvusocks.net/api/socks/data", headers=HEADERS, params={'page': '1', 'limit': '1'}, timeout=10))
         except: pass
         await asyncio.sleep(600)
@@ -430,11 +436,7 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('allow', allow_user))
     application.add_handler(CommandHandler('new', update_cookie))
-    
-    # Text Handler
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    
-    # Callback Handler
     application.add_handler(CallbackQueryHandler(button_click))
 
     print("Bot is running...")
