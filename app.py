@@ -48,13 +48,13 @@ FORBIDDEN_COUNTRIES = {
     'Finland', 'Azerbaijan', 'Algeria', 'Morocco', 'Denmark', 'Malaysia'
 }
 
-DEFAULT_COOKIE = 'notice=1; notice_time=1739170824; _ga=GA1.2.907186445.1766117007; _gid=GA1.2.509279953.1766117007; _gat=1; PHPSESSID=pnca790u3m3teqi5s4na32aip9; 0878fb59c92af61fa8719cf910b34ff6=7c1cbe6f7c318625856daaded3811345d48ef7e7a%3A4%3A%7Bi%3A0%3Bs%3A6%3A%22348422%22%3Bi%3A1%3Bs%3A14%3A%22miismailhassan%22%3Bi%3A2%3Bi%3A2592000%3Bi%3A3%3Ba%3A0%3A%7B%7D%7D; loginCookie=GDK8QwXEHH; _ga_N1LC62MVC1=GS2.2.s1766206699$o6$g1$t1766206725$j34$l0$h0'
+# Updated Cookie from latest log
+DEFAULT_COOKIE = '_ga=GA1.2.907186445.1766117007; _gid=GA1.2.409351101.1768402779; notice=1; notice_time=1739170824; PHPSESSID=c05e028ff8e962f21bc3cfa2b94ee4d4; 0878fb59c92af61fa8719cf910b34ff6=1e6047aef118f49bf18fa82f8ff7e03fb61bf4e9a%3A4%3A%7Bi%3A0%3Bi%3A498299%3Bi%3A1%3Bs%3A11%3A%22syaminhasan%22%3Bi%3A2%3Bi%3A2592000%3Bi%3A3%3Ba%3A0%3A%7B%7D%7D; loginCookie=KCKJX956h0; _ga_N1LC62MVC1=GS2.2.s1768978726$o67$g1$t1768978931$j60$l0$h0; cf_clearance=bnFyij3y39cvidXqCV9rCK7L0UJwjgRV0LWPAxC2DY4-1768987008-1.2.1.1-eqwzq9Zl4un2k2Jf4W4W3jLIxTnHZhA4m6DsU_YIW.wFhMG23jtD606sFj9s1wnXc7S8rOZ.WaoEmB3uFPrNkyKeerDMPtX6s79hkftk.LkvenclJ42Z39rw4IfThwS2eDtTMYRLXu0h.9Gc0twNta1BvCFMpvqmwgKLC0BEdsrlNPawZyKMdxWv1nfw.3F9ryo8Hf6.3q15BaXonm098PPkswBkl2ubCumd.3Ar0GQ; remember_user_59ba36addc2b2f9401580f014c7f58ea4e30989d=eyJpdiI6Ikx5a09seTRWQlJvWWN0alUrSmI4OXc9PSIsInZhbHVlIjoiK3ozcXhoTnNXUkdyQmU2RFVOd3M3ODIyYzF4VkRiN056WU9id3JhYzdWcTJKd2NBS0NHaFRzNy9CSWNGWnZ2T0JlR3VBMDZXMzdlL2N1VGNsNkVGQWY4T0ZndXg2ZE5BWlM2YzRsSFd6UysvUzR3UU1udUY5RHZvRThJeDgwRlU3Z0NrVmNscE40eC96Y2tTemlKRlhlOFREbDIwbVRhbTNJazUwZWRxdGZLdjRROFFMZjVBYVh4S0EwYmF2MWlsUGZYRHhPbWNSR2w5Q3NzcW1JaUI5OTZxZTJYMDJDUy9NSTI3bEZUZDUvST0iLCJtYWMiOiIwNmY1NDIwODU1OWQ3ZWFiOTM0ZmMwYjNkY2Y0M2VlMGQ3MDY5Y2JlNTNhMWIwYTIwYmFmYThmYjA5YzcwMDA2IiwidGFnIjoiIn0%3D; notice_seen=eyJpdiI6Im9PUXV6Rk5ORzNUNzNaT0FtK3FNSHc9PSIsInZhbHVlIjoidDNXcXcxSjJSU3RyNWVScURiYWFudWczUGpFNFpEbTBoSnhnbzNteDZSSFJWWVdqWFFEK3dKdnY3TkdlOE50cWdTS1QwMGE1c1JmTlNVYkZ4clQ1NUduUTNZTjEyZUxGT2dGWCtnU2gza0U9IiwibWFjIjoiYTkyNDMxMjA3MDg3M2M1ZmMyODEyNWRmMTY5OTdiZDVkMzg5NzA1MWM3YmM0YjNlM2FlMjI2MjQ0ODAyMWM5MiIsInRhZyI6IiJ9; XSRF-TOKEN=eyJpdiI6IldHWTE1WG1hYVplb0xJUVc0SWNEYlE9PSIsInZhbHVlIjoiN1dQSW5xVDZkT2hTa3BOTXZOc0JIYTJiK1hNTlJjVFUrc2VpeXZJYUUwVXMxMlJRQzlzR2dMU0UyTklubVIyTEorQzYrNUorc2NUbkxPdzFYMXM1dXh4dWY2QkZnb2tMbSs5VUxVMTZtSmdDSlFYUGU1Z211ajRSZFRUNU05V1kiLCJtYWMiOiIwMWI5YmU1M2RlNmRjZTJlMDUyYmQ5OWI0ZDFhNjQwMzIyM2IxZjg5ZWJmYjU1YmIyYTE1MzNkN2UyNzc4YzZiIiwidGFnIjoiIn0%3D; dichvusocksnet-session=eyJpdiI6IjRhbEpRUUNHazZKOWRNODlzTFk2YXc9PSIsInZhbHVlIjoiNVczSTRFS3A5cFZEZnFRemlxQ2RmdkJyV1V6UGZWVkptb3JyT01taTNLVDdOSjRXWlZ6WEd3Ym5nSEVxTm1vWkNCZjFxdVBsMkJhYlNub3FjQmhYQTkxR2lsMUxob0VENVNqRXFtSVZvbVZwWjdaVStacmN2UTZSeU9zeFZRaFgiLCJtYWMiOiIzYjYxOTdmMDQxNzliYjliMGFmZjZkYjkxZDUwYzQyNzMyYWE3MGU0NjUwNGYwNGFiZGEyZjQyMmI5ZDc3ODUzIiwidGFnIjoiIn0%3D'
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 OPR/124.0.0.0',
-    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 OPR/125.0.0.0',
+    'Accept': '*/*',
     'X-Requested-With': 'XMLHttpRequest',
-    'Origin': 'https://dichvusocks.net',
     'Referer': 'https://dichvusocks.net/sockslist',
     'Cookie': DEFAULT_COOKIE 
 }
@@ -118,17 +118,29 @@ def increment_usage(user_id):
 # --- DISHVUSOCKS LOGIC (THREADED) ---
 
 def _sync_fetch_proxy_id(country_full_name):
-    url = "https://dichvusocks.net/Socks/GetData"
-    payload = {
-        'page': '1', 'auth': 'all', 'useType': 'all',
-        'country': country_full_name, 'region': 'all', 'city': 'all',
-        'blacklist': 'all', 'hostname': '', 'zipcode': ''
+    url = "https://dichvusocks.net/api/socks/data"
+    
+    params = {
+        'auth': '',
+        'useType': '',
+        'country': country_full_name,
+        'region': '',
+        'city': '',
+        'blacklist': '',
+        'zipcode': '',
+        'Host': '',
+        'page': '1',
+        'limit': '20'
     }
+
     try:
-        response = requests.post(url, headers=HEADERS, data=payload, timeout=10)
+        # Changed to GET request with params
+        response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        
         if response.status_code == 200:
             data = response.json()
-            proxy_list = data.get('data', [])
+            # Changed 'data' to 'rows' based on new API structure
+            proxy_list = data.get('rows', [])
             if not proxy_list: return None, "No proxies found."
             return random.choice(proxy_list)['Id'], None
         return None, f"API Error: {response.status_code}"
@@ -404,7 +416,8 @@ async def background_keep_alive():
     loop = asyncio.get_running_loop()
     while True:
         try:
-            await loop.run_in_executor(None, lambda: requests.post("https://dichvusocks.net/Socks/GetData", headers=HEADERS, data={'page': '1', 'auth': 'all', 'country': 'all'}, timeout=10))
+            # Updated to GET with correct endpoint and params
+            await loop.run_in_executor(None, lambda: requests.get("https://dichvusocks.net/api/socks/data", headers=HEADERS, params={'page': '1', 'limit': '1'}, timeout=10))
         except: pass
         await asyncio.sleep(600)
 
