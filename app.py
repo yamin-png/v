@@ -116,12 +116,12 @@ def increment_usage(user_id):
 
 # --- DISHVUSOCKS LOGIC ---
 
-def _sync_get_available_regions(country_full_name):
-    """Fetches list of available regions for a country."""
+def _sync_get_available_proxies(country_full_name):
+    """Fetches list of individual available proxies with speed."""
     url = "https://dichvusocks.net/api/socks/data"
     params = {
         'auth': '', 'useType': '', 'country': country_full_name,
-        'region': '', 'city': '', 'blacklist': 'no', # Always blacklist=no
+        'region': '', 'city': '', 'blacklist': 'no',
         'zipcode': '', 'Host': '', 'page': '1', 'limit': '200' 
     }
     try:
@@ -129,14 +129,31 @@ def _sync_get_available_regions(country_full_name):
         if response.status_code == 200:
             data = response.json()
             rows = data.get('rows', [])
-            regions = sorted(list(set(r['Region'] for r in rows if r.get('Region') and r['Region'] != 'Unknown')))
-            return regions, None
+            
+            proxies = []
+            for r in rows:
+                if not r.get('Region') or r['Region'] == 'Unknown': continue
+                
+                # Format Type short code
+                ptype = r.get('useType', 'N/A')
+                ptype_short = ptype[:3] if ptype else "UNK"
+                
+                proxies.append({
+                    'id': r['Id'],
+                    'region': r['Region'],
+                    'speed': r.get('Speed', 0),
+                    'type': ptype_short
+                })
+            
+            # Sort: Region A-Z, then Speed High-Low
+            proxies.sort(key=lambda x: (x['region'], -float(x['speed'])))
+            return proxies, None
         return [], f"API Error: {response.status_code}"
     except Exception as e:
         return [], str(e)
 
-def _sync_fetch_proxy_obj(country_full_name, region=''):
-    """Fetches a full proxy OBJECT (containing Speed, ID, etc)"""
+def _sync_fetch_proxy_obj_random(country_full_name, region=''):
+    """Fetches a random proxy object (for 'Get Another')."""
     url = "https://dichvusocks.net/api/socks/data"
     params = {
         'auth': '', 'useType': '', 'country': country_full_name,
@@ -149,7 +166,6 @@ def _sync_fetch_proxy_obj(country_full_name, region=''):
             data = response.json()
             proxy_list = data.get('rows', [])
             if not proxy_list: return None, "No proxies found."
-            # Return the whole object, not just ID
             return random.choice(proxy_list), None 
         return None, f"API Error: {response.status_code}"
     except Exception as e:
@@ -183,7 +199,6 @@ def get_full_country_name(code_or_name):
 # --- HANDLERS ---
 
 async def reset_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Resets allowed users list to Admins only."""
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS: return
 
@@ -194,12 +209,10 @@ async def reset_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
-    # ⛔ USERNAME CHECK ⛔
     if not user.username:
-        await update.message.reply_text("⚠️ **Username Required**\n\nPlease set a Telegram Username in your settings to use this bot.")
+        await update.message.reply_text("⚠️ **Username Required**\n\nPlease set a Telegram Username in your settings.")
         return
 
-    # Update Username Map
     BOT_DATA['username_map'][user.username.lower()] = user.id
     save_data(BOT_DATA)
 
@@ -213,14 +226,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
-    # ⛔ USERNAME CHECK ⛔
     if not user.username:
-        await update.message.reply_text("⚠️ **Username Required**\n\nPlease set a Telegram Username in your settings to use this bot.")
+        await update.message.reply_text("⚠️ **Username Required**\n\nPlease set a Telegram Username.")
         return
 
     text = update.message.text.strip()
     
-    # --- ADMIN ALLOW LOGIC ---
+    # --- ADMIN ALLOW ---
     if user.id in ADMIN_IDS:
         if re.search(r'[,\n]', text) or (text.isdigit() and len(text)>5) or text.startswith('@'):
             tokens = re.split(r'[,\s\n]+', text)
@@ -242,7 +254,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"✅ **Added {added_count} users to allow list.**", parse_mode='Markdown')
                 return
 
-    # --- NORMAL USER LOGIC ---
     if user.id not in BOT_DATA['allowed_ids']: return
 
     if text == 'Get Proxy ✨':
@@ -254,40 +265,45 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def process_country_selection(message_obj, country_input, context):
     full_name = get_full_country_name(country_input)
     
-    msg = await message_obj.reply_text(f"🔍 Checking regions for **{full_name}**...", parse_mode='Markdown')
+    msg = await message_obj.reply_text(f"🔍 Fetching proxies for **{full_name}**...", parse_mode='Markdown')
     
     loop = asyncio.get_running_loop()
-    regions, error = await loop.run_in_executor(None, _sync_get_available_regions, full_name)
+    proxies, error = await loop.run_in_executor(None, _sync_get_available_proxies, full_name)
     
     if error:
-        await msg.edit_text(f"❌ Error fetching regions: {error}")
+        await msg.edit_text(f"❌ Error: {error}")
         return
 
     context.user_data['country_full'] = full_name
-    context.user_data['regions_list'] = regions
+    context.user_data['regions_list'] = proxies # Now storing detailed list
     
-    if not regions:
-        await msg.edit_text(f"⚠️ No specific regions found for **{full_name}**.\nClick below to get a random proxy.", 
-                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎲 Get Random Proxy", callback_data="get_proxy_random")]]))
+    if not proxies:
+        await msg.edit_text(f"⚠️ No proxies found for **{full_name}**.", 
+                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎲 Try Random Proxy", callback_data="get_proxy_random")]]))
         return
 
     await show_region_page(msg, 1, context)
 
 async def show_region_page(message_obj, page, context):
-    regions = context.user_data.get('regions_list', [])
+    proxies = context.user_data.get('regions_list', [])
     full_name = context.user_data.get('country_full', 'Unknown')
     
     items_per_page = 10
-    total_pages = math.ceil(len(regions) / items_per_page)
+    total_pages = math.ceil(len(proxies) / items_per_page)
     
     start_idx = (page - 1) * items_per_page
     end_idx = start_idx + items_per_page
-    current_regions = regions[start_idx:end_idx]
+    current_proxies = proxies[start_idx:end_idx]
     
     keyboard = []
+    # Two columns
     row = []
-    for reg in current_regions:
-        row.append(InlineKeyboardButton(reg, callback_data=f"sel_reg_{reg}"))
+    for p in current_proxies:
+        # Label: "Region (Speed - Type)"
+        label = f"{p['region']} ({p['speed']} - {p['type']})"
+        callback = f"sel_id_{p['id']}"
+        
+        row.append(InlineKeyboardButton(label, callback_data=callback))
         if len(row) == 2:
             keyboard.append(row)
             row = []
@@ -301,35 +317,52 @@ async def show_region_page(message_obj, page, context):
     chunked_pagination = [pagination_row[i:i + 8] for i in range(0, len(pagination_row), 8)]
     for chunk in chunked_pagination: keyboard.append(chunk)
 
-    keyboard.append([InlineKeyboardButton("🎲 Any Region", callback_data="get_proxy_random")])
+    keyboard.append([InlineKeyboardButton("🎲 Any Region (Random)", callback_data="get_proxy_random")])
     
     await message_obj.edit_text(
-        f"🌍 **Select Region for {full_name}**\nPage {page}/{total_pages}",
+        f"🌍 **Select Proxy for {full_name}**\nPage {page}/{total_pages}\n(Speed - Type)",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='Markdown'
     )
 
-async def process_proxy_fetch(message_obj, country, region, context, user):
+async def process_proxy_fetch(message_obj, country, region, context, user, proxy_id=None):
     region_display = region if region else "Any"
     if hasattr(message_obj, 'edit_text'):
-        await message_obj.edit_text(f"⏳ Fetching **{country}** ({region_display})...", parse_mode='Markdown')
+        await message_obj.edit_text(f"⏳ Unlocking proxy...", parse_mode='Markdown')
 
     loop = asyncio.get_running_loop()
     
-    # Fetch FULL Proxy Object (with Speed, ID, etc)
-    proxy_obj, error = await loop.run_in_executor(None, _sync_fetch_proxy_obj, country, region)
-    
-    if error:
-        btns = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Regions", callback_data="back_to_regions")]])
-        if hasattr(message_obj, 'edit_text'):
-            await message_obj.edit_text(f"❌ **Error:** {error}", reply_markup=btns)
-        return
+    # CASE A: Specific ID (User clicked a button)
+    if proxy_id:
+        pid = proxy_id
+        # We need to find object details for logging/display if we only have ID
+        # Check cache
+        p_list = context.user_data.get('regions_list', [])
+        p_obj = next((p for p in p_list if str(p['id']) == str(pid) or p['id'] == pid), {})
+        
+        speed = p_obj.get('speed', 'N/A')
+        p_type = p_obj.get('type', 'N/A')
+        real_region = p_obj.get('region', region_display)
+        
+        # Set context for "Get Another"
+        context.user_data['last_region'] = real_region
 
-    pid = proxy_obj['Id']
-    speed = proxy_obj.get('Speed', 'N/A')
-    p_type = proxy_obj.get('useType', 'N/A')
-    real_region = proxy_obj.get('Region', region_display)
+    # CASE B: Random (Get Another / Random Button)
+    else:
+        proxy_obj, error = await loop.run_in_executor(None, _sync_fetch_proxy_obj_random, country, region)
+        if error:
+            btns = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to List", callback_data="back_to_regions")]])
+            if hasattr(message_obj, 'edit_text'):
+                await message_obj.edit_text(f"❌ **Error:** {error}", reply_markup=btns)
+            return
+        
+        pid = proxy_obj['Id']
+        speed = proxy_obj.get('Speed', 'N/A')
+        p_type = proxy_obj.get('useType', 'N/A')
+        real_region = proxy_obj.get('Region', region_display)
+        context.user_data['last_region'] = real_region
 
+    # Reveal
     creds, error = await loop.run_in_executor(None, _sync_reveal_credentials, pid)
     
     if error:
@@ -350,11 +383,9 @@ async def process_proxy_fetch(message_obj, country, region, context, user):
         f"**Details:**\nHost: `{ip}`\nPort: `{port}`\nUser: `{u}`\nPass: `{p}`"
     )
     
-    context.user_data['last_region'] = region
-
     kb = [
         [InlineKeyboardButton("🔄 Get Another (Same Region)", callback_data="get_same_proxy")],
-        [InlineKeyboardButton("🔙 Select Different Region", callback_data="back_to_regions")],
+        [InlineKeyboardButton("🔙 Select Different Proxy", callback_data="back_to_regions")],
         [InlineKeyboardButton("🌍 Change Country", callback_data="change_country")]
     ]
     
@@ -376,6 +407,7 @@ async def process_proxy_fetch(message_obj, country, region, context, user):
             f"🆔 **ID:** `{user.id}`\n"
             f"🏳️ **Country:** {country}\n"
             f"📍 **Region:** {real_region}\n"
+            f"⚡ **Speed:** {speed}\n"
             f"📊 **Today Use:** {usage_count}"
         )
         
@@ -397,7 +429,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
     user = query.from_user
 
-    # ⛔ USERNAME CHECK ⛔
     if not user.username:
         await query.answer("⚠️ Username Required", show_alert=True)
         return
@@ -406,7 +437,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("🚫 Access Denied")
         return
 
-    # Admin Ban Handling
+    # Admin Ban
     if action.startswith('ban_user_'):
         if user.id not in ADMIN_IDS:
             await query.answer("🚫 Admin Only", show_alert=True)
@@ -430,10 +461,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     if action == 'noop': return
 
-    if action.startswith('sel_reg_'):
-        region = action.split('sel_reg_')[1]
-        # Pass USER object
-        await process_proxy_fetch(query.message, country, region, context, user)
+    if action.startswith('sel_id_'):
+        pid = action.split('sel_id_')[1]
+        # Fetch SPECIFIC proxy
+        await process_proxy_fetch(query.message, country, '', context, user, proxy_id=pid)
         return
 
     if action == 'get_proxy_random':
@@ -442,6 +473,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == 'get_same_proxy':
         region = context.user_data.get('last_region', '')
+        # Pass region to fetch a random one from that region
         await process_proxy_fetch(query.message, country, region, context, user)
         return
 
