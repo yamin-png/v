@@ -9,6 +9,7 @@ import datetime
 import pycountry
 import math
 import time
+from html import escape
 from urllib.parse import unquote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -186,13 +187,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- USERNAME CHECK ---
     if not user.username:
         await update.message.reply_text(
-            "⚠️ **Username Required**\n\n"
+            "⚠️ <b>Username Required</b>\n\n"
             "You do not have a Telegram Username set. For security reasons, you cannot use this bot without one.\n\n"
-            "**How to set a username:**\n"
+            "<b>How to set a username:</b>\n"
             "1. Go to Telegram Settings.\n"
             "2. Edit Profile / Username.\n"
             "3. Set a unique username and try /start again.",
-            parse_mode='Markdown'
+            parse_mode='HTML'
         )
         return
 
@@ -201,13 +202,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data(BOT_DATA)
 
     # 1. NOTIFY ADMINS OF NEW JOIN
-    user_mention = f"@{user.username}"
+    user_mention = f"@{escape(user.username)}"
     log_msg = (
-        f"🔔 **New User Joined**\n\n"
-        f"👤 **User:** {user_mention}\n"
-        f"📛 **First Name:** {user.first_name}\n"
-        f"📛 **Last Name:** {user.last_name or 'N/A'}\n"
-        f"🆔 **ID:** `{user.id}`"
+        f"🔔 <b>New User Joined</b>\n\n"
+        f"👤 <b>User:</b> {user_mention}\n"
+        f"📛 <b>First Name:</b> {escape(user.first_name)}\n"
+        f"📛 <b>Last Name:</b> {escape(user.last_name or 'N/A')}\n"
+        f"🆔 <b>ID:</b> <code>{user.id}</code>"
     )
     
     # Admin Buttons
@@ -220,21 +221,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     kb = InlineKeyboardMarkup([kb_btns])
     
-    await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_msg, reply_markup=kb, parse_mode='Markdown')
+    await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_msg, reply_markup=kb, parse_mode='HTML')
 
     # 2. Check access
     if user.id not in BOT_DATA['allowed_ids']:
-        await update.message.reply_text(f"⌛ **Your request has been sent to admins.**\nPlease wait for approval. ID: `{user.id}`", parse_mode='Markdown')
+        await update.message.reply_text(f"⌛ <b>Your request has been sent to admins.</b>\nPlease wait for approval. ID: <code>{user.id}</code>", parse_mode='HTML')
         return
 
     markup = ReplyKeyboardMarkup([['Get Proxy ✨']], resize_keyboard=True)
-    await update.message.reply_text("👋 **Welcome Back!**\nClick **Get Proxy** to start.", reply_markup=markup, parse_mode='Markdown')
+    await update.message.reply_text("👋 <b>Welcome Back!</b>\nClick <b>Get Proxy</b> to start.", reply_markup=markup, parse_mode='HTML')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
     if not user.username:
-        await update.message.reply_text("⚠️ **Username Required**\nPlease set a Telegram Username in your settings to use this bot.")
+        await update.message.reply_text("⚠️ <b>Username Required</b>\nPlease set a Telegram Username in your settings to use this bot.", parse_mode='HTML')
         return
 
     if user.id not in BOT_DATA['allowed_ids']: return
@@ -242,7 +243,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
     if text == 'Get Proxy ✨':
-        await update.message.reply_text("🌍 **Select Country**\nType the **2-letter Code** (e.g., `US`, `VN`, `CA`).", parse_mode='Markdown')
+        await update.message.reply_text("🌍 <b>Select Country</b>\nType the <b>2-letter Code</b> (e.g., <code>US</code>, <code>VN</code>, <code>CA</code>).", parse_mode='HTML')
         return
 
     if len(text) == 2 or len(text) > 3:
@@ -250,21 +251,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_country_selection(message_obj, country_input, context):
     full_name = get_full_country_name(country_input)
-    msg = await message_obj.reply_text(f"🔍 Fetching proxies for **{full_name}**...", parse_mode='Markdown')
+    msg = await message_obj.reply_text(f"🔍 Fetching proxies for <b>{escape(full_name)}</b>...", parse_mode='HTML')
     
     loop = asyncio.get_running_loop()
     proxies, error = await loop.run_in_executor(None, _sync_get_available_proxies, full_name)
     
     if error:
-        await msg.edit_text(f"❌ Error: {error}")
+        await msg.edit_text(f"❌ Error: {escape(str(error))}", parse_mode='HTML')
         return
 
     context.user_data['country_full'] = full_name
     context.user_data['regions_list'] = proxies
     
     if not proxies:
-        await msg.edit_text(f"⚠️ No proxies found for **{full_name}**.", 
-                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎲 Try Random Proxy", callback_data="get_proxy_random")]]))
+        await msg.edit_text(f"⚠️ No proxies found for <b>{escape(full_name)}</b>.", 
+                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎲 Try Random Proxy", callback_data="get_proxy_random")]]),
+                            parse_mode='HTML')
         return
 
     await show_region_page(msg, 1, context)
@@ -298,9 +300,9 @@ async def show_region_page(message_obj, page, context):
     keyboard.append([InlineKeyboardButton("🌍 Change Country", callback_data="change_country")])
     
     await message_obj.edit_text(
-        f"🌍 **Select Proxy for {full_name}**\nChoose a region from the list below:",
+        f"🌍 <b>Select Proxy for {escape(full_name)}</b>\nChoose a region from the list below:",
         reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='Markdown'
+        parse_mode='HTML'
     )
 
 async def process_proxy_fetch(message_obj, country, region, context, user, proxy_id=None, is_edit=True):
@@ -308,16 +310,16 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     last_req = USER_COOLDOWNS.get(user.id, 0)
     if now - last_req < 30:
         remaining = int(30 - (now - last_req))
-        await context.bot.send_message(chat_id=user.id, text=f"⏳ **Cooldown active!**\nPlease wait **{remaining} seconds** before generating another proxy.")
+        await context.bot.send_message(chat_id=user.id, text=f"⏳ <b>Cooldown active!</b>\nPlease wait <b>{remaining} seconds</b> before generating another proxy.", parse_mode='HTML')
         return
 
     USER_COOLDOWNS[user.id] = now
 
     status_msg = None
     if is_edit and hasattr(message_obj, 'edit_text'):
-        status_msg = await message_obj.edit_text("⏳ Unlocking proxy...", parse_mode='Markdown')
+        status_msg = await message_obj.edit_text("⏳ Unlocking proxy...", parse_mode='HTML')
     else:
-        status_msg = await context.bot.send_message(chat_id=user.id, text="⏳ Unlocking proxy...", parse_mode='Markdown')
+        status_msg = await context.bot.send_message(chat_id=user.id, text="⏳ Unlocking proxy...", parse_mode='HTML')
 
     loop = asyncio.get_running_loop()
     
@@ -330,14 +332,14 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     else:
         proxy_obj, error = await loop.run_in_executor(None, _sync_fetch_proxy_obj_random, country, region)
         if error:
-            await status_msg.edit_text(f"❌ **Error:** {error}")
+            await status_msg.edit_text(f"❌ <b>Error:</b> {escape(str(error))}", parse_mode='HTML')
             return
         pid, speed, p_type, real_region = proxy_obj['Id'], proxy_obj.get('Speed', 'N/A'), proxy_obj.get('useType', 'N/A'), proxy_obj.get('Region', region)
         context.user_data['last_region'] = real_region
 
     creds, error = await loop.run_in_executor(None, _sync_reveal_credentials, pid)
     if error:
-        await status_msg.edit_text(f"❌ **Reveal Error:** {error}")
+        await status_msg.edit_text(f"❌ <b>Reveal Error:</b> {escape(str(error))}", parse_mode='HTML')
         return
 
     try:
@@ -346,11 +348,11 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
         ip, port, u, p = "N/A", "N/A", "N/A", "N/A"
 
     final_text = (
-        f"✅ **{country} Proxy Generated**\n"
-        f"📍 Region: {real_region}\n"
-        f"🚀 Speed: **{speed}** | 📶 Type: **{p_type}**\n\n"
-        f"`{creds}`\n\n"
-        f"**Details:**\nHost: `{ip}`\nPort: `{port}`\nUser: `{u}`\nPass: `{p}`"
+        f"✅ <b>{escape(country)} Proxy Generated</b>\n"
+        f"📍 Region: {escape(str(real_region))}\n"
+        f"🚀 Speed: <b>{escape(str(speed))}</b> | 📶 Type: <b>{escape(str(p_type))}</b>\n\n"
+        f"<code>{escape(creds)}</code>\n\n"
+        f"<b>Details:</b>\nHost: <code>{escape(ip)}</code>\nPort: <code>{escape(port)}</code>\nUser: <code>{escape(u)}</code>\nPass: <code>{escape(p)}</code>"
     )
     
     kb = InlineKeyboardMarkup([
@@ -359,22 +361,22 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
         [InlineKeyboardButton("🌍 Change Country", callback_data="change_country")]
     ])
     
-    await status_msg.edit_text(final_text, parse_mode='Markdown', reply_markup=kb)
+    await status_msg.edit_text(final_text, parse_mode='HTML', reply_markup=kb)
 
     # --- LOGGING ---
     usage_count = increment_usage(user.id)
     log_message = (
-        f"🚀 **Proxy Generated**\n\n"
-        f"👤 **User:** @{user.username} (`{user.id}`)\n"
-        f"🏳️ **Country:** {country} | 📍 {real_region}\n"
-        f"⚡ **Speed:** {speed}\n"
-        f"📊 **Daily Use:** {usage_count}"
+        f"🚀 <b>Proxy Generated</b>\n\n"
+        f"👤 <b>User:</b> @{escape(user.username)} (<code>{user.id}</code>)\n"
+        f"🏳️ <b>Country:</b> {escape(country)} | 📍 {escape(str(real_region))}\n"
+        f"⚡ <b>Speed:</b> {escape(str(speed))}\n"
+        f"📊 <b>Daily Use:</b> {usage_count}"
     )
     
     # Log group markup with Ban button
     log_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_user_{user.id}")]])
     
-    await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_message, reply_markup=log_kb, parse_mode='Markdown')
+    await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_message, reply_markup=log_kb, parse_mode='HTML')
 
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -396,9 +398,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_data(BOT_DATA)
             await query.answer("✅ User Allowed")
             # Update log message to show it was approved
-            await query.message.edit_text(f"{query.message.text_markdown}\n\n✅ **APPROVED BY ADMIN**", parse_mode='Markdown')
+            await query.message.edit_text(f"{query.message.text_html}\n\n✅ <b>APPROVED BY ADMIN</b>", parse_mode='HTML')
             try:
-                await context.bot.send_message(chat_id=target_id, text="✅ **Access Granted!**\nYour account has been approved. Click /start to begin.", parse_mode='Markdown')
+                await context.bot.send_message(chat_id=target_id, text="✅ <b>Access Granted!</b>\nYour account has been approved. Click /start to begin.", parse_mode='HTML')
             except: pass
         return
 
@@ -414,11 +416,11 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await query.answer("🚫 Banned")
         # Update message in group to show banned status
-        await query.message.edit_text(f"{query.message.text_markdown}\n\n🚫 **BANNED BY ADMIN**", parse_mode='Markdown')
+        await query.message.edit_text(f"{query.message.text_html}\n\n🚫 <b>BANNED BY ADMIN</b>", parse_mode='HTML')
         
         # Notify User
         try:
-            await context.bot.send_message(chat_id=target_id, text=f"🚫 **You have been banned.**\n\n**Reason:** Violation of terms or suspicious activity.\nContact an admin if you believe this is a mistake.")
+            await context.bot.send_message(chat_id=target_id, text=f"🚫 <b>You have been banned.</b>\n\n<b>Reason:</b> Violation of terms or suspicious activity.\nContact an admin if you believe this is a mistake.", parse_mode='HTML')
         except: pass
         return
 
@@ -439,7 +441,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == 'back_to_regions':
         await show_region_page(query.message, 1, context)
     elif action == 'change_country':
-        await query.message.edit_text("🌍 **Select Country**\nType the 2-letter Code.", parse_mode='Markdown')
+        await query.message.edit_text("🌍 <b>Select Country</b>\nType the 2-letter Code.", parse_mode='HTML')
 
     await query.answer()
 
@@ -458,7 +460,7 @@ async def update_cookie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_data(BOT_DATA)
         update_headers_with_xsrf()
         await update.message.reply_text("✅ Cookie Updated!")
-    except: await update.message.reply_text("Usage: `/new <cookie>`")
+    except: await update.message.reply_text("Usage: <code>/new &lt;cookie&gt;</code>", parse_mode='HTML')
 
 if __name__ == '__main__':
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
