@@ -183,13 +183,25 @@ def get_full_country_name(code_or_name):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
+    # --- USERNAME CHECK ---
+    if not user.username:
+        await update.message.reply_text(
+            "⚠️ **Username Required**\n\n"
+            "You do not have a Telegram Username set. For security reasons, you cannot use this bot without one.\n\n"
+            "**How to set a username:**\n"
+            "1. Go to Telegram Settings.\n"
+            "2. Edit Profile / Username.\n"
+            "3. Set a unique username and try /start again.",
+            parse_mode='Markdown'
+        )
+        return
+
     # Save user to map
-    if user.username:
-        BOT_DATA['username_map'][user.username.lower()] = user.id
+    BOT_DATA['username_map'][user.username.lower()] = user.id
     save_data(BOT_DATA)
 
     # 1. NOTIFY ADMINS OF NEW JOIN
-    user_mention = f"@{user.username}" if user.username else "No Username"
+    user_mention = f"@{user.username}"
     log_msg = (
         f"🔔 **New User Joined**\n\n"
         f"👤 **User:** {user_mention}\n"
@@ -198,10 +210,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🆔 **ID:** `{user.id}`"
     )
     
-    # Show allow button to admins if not already allowed
-    kb = None
+    # Admin Buttons
+    kb_btns = []
     if user.id not in BOT_DATA['allowed_ids']:
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Allow User", callback_data=f"allow_user_{user.id}")]])
+        kb_btns.append(InlineKeyboardButton("✅ Allow User", callback_data=f"allow_user_{user.id}"))
+    
+    # Always include Ban button in log group
+    kb_btns.append(InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_user_{user.id}"))
+    
+    kb = InlineKeyboardMarkup([kb_btns])
     
     await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_msg, reply_markup=kb, parse_mode='Markdown')
 
@@ -215,6 +232,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    
+    if not user.username:
+        await update.message.reply_text("⚠️ **Username Required**\nPlease set a Telegram Username in your settings to use this bot.")
+        return
+
     if user.id not in BOT_DATA['allowed_ids']: return
 
     text = update.message.text.strip()
@@ -223,7 +245,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🌍 **Select Country**\nType the **2-letter Code** (e.g., `US`, `VN`, `CA`).", parse_mode='Markdown')
         return
 
-    # Process if it looks like a country code
     if len(text) == 2 or len(text) > 3:
         await process_country_selection(update.message, text, context)
 
@@ -283,7 +304,6 @@ async def show_region_page(message_obj, page, context):
     )
 
 async def process_proxy_fetch(message_obj, country, region, context, user, proxy_id=None, is_edit=True):
-    # Determine wait time
     now = time.time()
     last_req = USER_COOLDOWNS.get(user.id, 0)
     if now - last_req < 30:
@@ -293,7 +313,6 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
 
     USER_COOLDOWNS[user.id] = now
 
-    # Show loading
     status_msg = None
     if is_edit and hasattr(message_obj, 'edit_text'):
         status_msg = await message_obj.edit_text("⏳ Unlocking proxy...", parse_mode='Markdown')
@@ -345,18 +364,26 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     # --- LOGGING ---
     usage_count = increment_usage(user.id)
     log_message = (
-        f"🚀 **Proxy Generated**\n"
-        f"👤 User: @{user.username} (`{user.id}`)\n"
-        f"🏳️ Country: {country} | 📍 {real_region}\n"
-        f"⚡ Speed: {speed}\n"
-        f"📊 Daily Use: {usage_count}"
+        f"🚀 **Proxy Generated**\n\n"
+        f"👤 **User:** @{user.username} (`{user.id}`)\n"
+        f"🏳️ **Country:** {country} | 📍 {real_region}\n"
+        f"⚡ **Speed:** {speed}\n"
+        f"📊 **Daily Use:** {usage_count}"
     )
-    await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_message, parse_mode='Markdown')
+    
+    # Log group markup with Ban button
+    log_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_user_{user.id}")]])
+    
+    await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_message, reply_markup=log_kb, parse_mode='Markdown')
 
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     action = query.data
     user = query.from_user
+
+    if not user.username:
+        await query.answer("⚠️ Username Required!", show_alert=True)
+        return
 
     # Admin: Allow User
     if action.startswith('allow_user_'):
@@ -368,10 +395,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             BOT_DATA['allowed_ids'].append(target_id)
             save_data(BOT_DATA)
             await query.answer("✅ User Allowed")
-            await query.message.edit_text(f"{query.message.text}\n\n✅ **APPROVED BY ADMIN**")
-            # Notify User
+            # Update log message to show it was approved
+            await query.message.edit_text(f"{query.message.text_markdown}\n\n✅ **APPROVED BY ADMIN**", parse_mode='Markdown')
             try:
-                await context.bot.send_message(chat_id=target_id, text="✅ **Access Granted!**\nYour account has been approved by an admin. Click /start to begin.", parse_mode='Markdown')
+                await context.bot.send_message(chat_id=target_id, text="✅ **Access Granted!**\nYour account has been approved. Click /start to begin.", parse_mode='Markdown')
             except: pass
         return
 
@@ -384,13 +411,15 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if target_id in BOT_DATA['allowed_ids']:
             BOT_DATA['allowed_ids'].remove(target_id)
             save_data(BOT_DATA)
-            await query.answer("🚫 Banned")
-            await query.message.edit_text(f"{query.message.text}\n\n🚫 **BANNED**")
-            # Notify User
-            try:
-                reason = "Violation of terms or suspicious activity."
-                await context.bot.send_message(chat_id=target_id, text=f"🚫 **You have been banned.**\n\n**Reason:** {reason}\nContact an admin if you believe this is a mistake.")
-            except: pass
+        
+        await query.answer("🚫 Banned")
+        # Update message in group to show banned status
+        await query.message.edit_text(f"{query.message.text_markdown}\n\n🚫 **BANNED BY ADMIN**", parse_mode='Markdown')
+        
+        # Notify User
+        try:
+            await context.bot.send_message(chat_id=target_id, text=f"🚫 **You have been banned.**\n\n**Reason:** Violation of terms or suspicious activity.\nContact an admin if you believe this is a mistake.")
+        except: pass
         return
 
     if user.id not in BOT_DATA['allowed_ids']:
@@ -401,22 +430,14 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if action.startswith('reg_page_'):
         await show_region_page(query.message, int(action.split('_')[2]), context)
-    
     elif action.startswith('sel_id_'):
-        pid = action.split('sel_id_')[1]
-        await process_proxy_fetch(query.message, country, '', context, user, proxy_id=pid, is_edit=True)
-
+        await process_proxy_fetch(query.message, country, '', context, user, proxy_id=action.split('sel_id_')[1], is_edit=True)
     elif action == 'get_proxy_random':
         await process_proxy_fetch(query.message, country, '', context, user, is_edit=True)
-
     elif action == 'get_same_proxy':
-        # Send in NEW message (is_edit=False)
-        region = context.user_data.get('last_region', '')
-        await process_proxy_fetch(query.message, country, region, context, user, is_edit=False)
-
+        await process_proxy_fetch(query.message, country, context.user_data.get('last_region', ''), context, user, is_edit=False)
     elif action == 'back_to_regions':
         await show_region_page(query.message, 1, context)
-
     elif action == 'change_country':
         await query.message.edit_text("🌍 **Select Country**\nType the 2-letter Code.", parse_mode='Markdown')
 
