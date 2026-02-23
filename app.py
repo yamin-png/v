@@ -12,6 +12,7 @@ import time
 from html import escape
 from urllib.parse import unquote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder, 
     CommandHandler, 
@@ -257,16 +258,22 @@ async def process_country_selection(message_obj, country_input, context):
     proxies, error = await loop.run_in_executor(None, _sync_get_available_proxies, full_name)
     
     if error:
-        await msg.edit_text(f"❌ Error: {escape(str(error))}", parse_mode='HTML')
+        try:
+            await msg.edit_text(f"❌ Error: {escape(str(error))}", parse_mode='HTML')
+        except BadRequest as e:
+            if "Message is not modified" not in str(e): raise e
         return
 
     context.user_data['country_full'] = full_name
     context.user_data['regions_list'] = proxies
     
     if not proxies:
-        await msg.edit_text(f"⚠️ No proxies found for <b>{escape(str(full_name))}</b>.", 
-                            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎲 Try Random Proxy", callback_data="get_proxy_random")]]),
-                            parse_mode='HTML')
+        try:
+            await msg.edit_text(f"⚠️ No proxies found for <b>{escape(str(full_name))}</b>.", 
+                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎲 Try Random Proxy", callback_data="get_proxy_random")]]),
+                                parse_mode='HTML')
+        except BadRequest as e:
+            if "Message is not modified" not in str(e): raise e
         return
 
     await show_region_page(msg, 1, context)
@@ -299,18 +306,24 @@ async def show_region_page(message_obj, page, context):
     keyboard.append([InlineKeyboardButton("🎲 Any Region (Random)", callback_data="get_proxy_random")])
     keyboard.append([InlineKeyboardButton("🌍 Change Country", callback_data="change_country")])
     
-    await message_obj.edit_text(
-        f"🌍 <b>Select Proxy for {escape(str(full_name))}</b>\nChoose a region from the list below:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='HTML'
-    )
+    try:
+        await message_obj.edit_text(
+            f"🌍 <b>Select Proxy for {escape(str(full_name))}</b>\nChoose a region from the list below:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode='HTML'
+        )
+    except BadRequest as e:
+        if "Message is not modified" not in str(e): raise e
 
 async def process_proxy_fetch(message_obj, country, region, context, user, proxy_id=None, is_edit=True):
     # Safety Check: If country is missing due to session loss
     if not country:
         error_text = "❌ <b>Session Lost:</b> Please select a country again by clicking 'Get Proxy ✨'."
         if is_edit and hasattr(message_obj, 'edit_text'):
-            await message_obj.edit_text(error_text, parse_mode='HTML')
+            try:
+                await message_obj.edit_text(error_text, parse_mode='HTML')
+            except BadRequest as e:
+                if "Message is not modified" not in str(e): raise e
         else:
             await context.bot.send_message(chat_id=user.id, text=error_text, parse_mode='HTML')
         return
@@ -326,7 +339,11 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
 
     status_msg = None
     if is_edit and hasattr(message_obj, 'edit_text'):
-        status_msg = await message_obj.edit_text("⏳ Unlocking proxy...", parse_mode='HTML')
+        try:
+            status_msg = await message_obj.edit_text("⏳ Unlocking proxy...", parse_mode='HTML')
+        except BadRequest as e:
+            if "Message is not modified" not in str(e): raise e
+            status_msg = message_obj
     else:
         status_msg = await context.bot.send_message(chat_id=user.id, text="⏳ Unlocking proxy...", parse_mode='HTML')
 
@@ -341,14 +358,20 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     else:
         proxy_obj, error = await loop.run_in_executor(None, _sync_fetch_proxy_obj_random, country, region)
         if error:
-            await status_msg.edit_text(f"❌ <b>Error:</b> {escape(str(error))}", parse_mode='HTML')
+            try:
+                await status_msg.edit_text(f"❌ <b>Error:</b> {escape(str(error))}", parse_mode='HTML')
+            except BadRequest as e:
+                if "Message is not modified" not in str(e): raise e
             return
         pid, speed, p_type, real_region = proxy_obj['Id'], proxy_obj.get('Speed', 'N/A'), proxy_obj.get('useType', 'N/A'), proxy_obj.get('Region', region)
         context.user_data['last_region'] = real_region
 
     creds, error = await loop.run_in_executor(None, _sync_reveal_credentials, pid)
     if error:
-        await status_msg.edit_text(f"❌ <b>Reveal Error:</b> {escape(str(error))}", parse_mode='HTML')
+        try:
+            await status_msg.edit_text(f"❌ <b>Reveal Error:</b> {escape(str(error))}", parse_mode='HTML')
+        except BadRequest as e:
+            if "Message is not modified" not in str(e): raise e
         return
 
     try:
@@ -370,7 +393,10 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
         [InlineKeyboardButton("🌍 Change Country", callback_data="change_country")]
     ])
     
-    await status_msg.edit_text(final_text, parse_mode='HTML', reply_markup=kb)
+    try:
+        await status_msg.edit_text(final_text, parse_mode='HTML', reply_markup=kb)
+    except BadRequest as e:
+        if "Message is not modified" not in str(e): raise e
 
     # --- LOGGING ---
     usage_count = increment_usage(user.id)
@@ -407,7 +433,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             save_data(BOT_DATA)
             await query.answer("✅ User Allowed")
             # Update log message to show it was approved
-            await query.message.edit_text(f"{query.message.text_html}\n\n✅ <b>APPROVED BY ADMIN</b>", parse_mode='HTML')
+            try:
+                await query.message.edit_text(f"{query.message.text_html}\n\n✅ <b>APPROVED BY ADMIN</b>", parse_mode='HTML')
+            except BadRequest as e:
+                if "Message is not modified" not in str(e): raise e
             try:
                 await context.bot.send_message(chat_id=target_id, text="✅ <b>Access Granted!</b>\nYour account has been approved. Click /start to begin.", parse_mode='HTML')
             except: pass
@@ -425,7 +454,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await query.answer("🚫 Banned")
         # Update message in group to show banned status
-        await query.message.edit_text(f"{query.message.text_html}\n\n🚫 <b>BANNED BY ADMIN</b>", parse_mode='HTML')
+        try:
+            await query.message.edit_text(f"{query.message.text_html}\n\n🚫 <b>BANNED BY ADMIN</b>", parse_mode='HTML')
+        except BadRequest as e:
+            if "Message is not modified" not in str(e): raise e
         
         # Notify User
         try:
@@ -450,7 +482,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == 'back_to_regions':
         await show_region_page(query.message, 1, context)
     elif action == 'change_country':
-        await query.message.edit_text("🌍 <b>Select Country</b>\nType the 2-letter Code.", parse_mode='HTML')
+        try:
+            await query.message.edit_text("🌍 <b>Select Country</b>\nType the 2-letter Code.", parse_mode='HTML')
+        except BadRequest as e:
+            if "Message is not modified" not in str(e): raise e
 
     await query.answer()
 
