@@ -202,12 +202,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data(BOT_DATA)
 
     # 1. NOTIFY ADMINS OF NEW JOIN
-    user_mention = f"@{escape(user.username)}"
+    user_mention = f"@{escape(str(user.username))}"
     log_msg = (
         f"🔔 <b>New User Joined</b>\n\n"
         f"👤 <b>User:</b> {user_mention}\n"
-        f"📛 <b>First Name:</b> {escape(user.first_name)}\n"
-        f"📛 <b>Last Name:</b> {escape(user.last_name or 'N/A')}\n"
+        f"📛 <b>First Name:</b> {escape(str(user.first_name))}\n"
+        f"📛 <b>Last Name:</b> {escape(str(user.last_name or 'N/A'))}\n"
         f"🆔 <b>ID:</b> <code>{user.id}</code>"
     )
     
@@ -251,7 +251,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_country_selection(message_obj, country_input, context):
     full_name = get_full_country_name(country_input)
-    msg = await message_obj.reply_text(f"🔍 Fetching proxies for <b>{escape(full_name)}</b>...", parse_mode='HTML')
+    msg = await message_obj.reply_text(f"🔍 Fetching proxies for <b>{escape(str(full_name))}</b>...", parse_mode='HTML')
     
     loop = asyncio.get_running_loop()
     proxies, error = await loop.run_in_executor(None, _sync_get_available_proxies, full_name)
@@ -264,7 +264,7 @@ async def process_country_selection(message_obj, country_input, context):
     context.user_data['regions_list'] = proxies
     
     if not proxies:
-        await msg.edit_text(f"⚠️ No proxies found for <b>{escape(full_name)}</b>.", 
+        await msg.edit_text(f"⚠️ No proxies found for <b>{escape(str(full_name))}</b>.", 
                             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎲 Try Random Proxy", callback_data="get_proxy_random")]]),
                             parse_mode='HTML')
         return
@@ -300,12 +300,21 @@ async def show_region_page(message_obj, page, context):
     keyboard.append([InlineKeyboardButton("🌍 Change Country", callback_data="change_country")])
     
     await message_obj.edit_text(
-        f"🌍 <b>Select Proxy for {escape(full_name)}</b>\nChoose a region from the list below:",
+        f"🌍 <b>Select Proxy for {escape(str(full_name))}</b>\nChoose a region from the list below:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode='HTML'
     )
 
 async def process_proxy_fetch(message_obj, country, region, context, user, proxy_id=None, is_edit=True):
+    # Safety Check: If country is missing due to session loss
+    if not country:
+        error_text = "❌ <b>Session Lost:</b> Please select a country again by clicking 'Get Proxy ✨'."
+        if is_edit and hasattr(message_obj, 'edit_text'):
+            await message_obj.edit_text(error_text, parse_mode='HTML')
+        else:
+            await context.bot.send_message(chat_id=user.id, text=error_text, parse_mode='HTML')
+        return
+
     now = time.time()
     last_req = USER_COOLDOWNS.get(user.id, 0)
     if now - last_req < 30:
@@ -348,11 +357,11 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
         ip, port, u, p = "N/A", "N/A", "N/A", "N/A"
 
     final_text = (
-        f"✅ <b>{escape(country)} Proxy Generated</b>\n"
+        f"✅ <b>{escape(str(country))} Proxy Generated</b>\n"
         f"📍 Region: {escape(str(real_region))}\n"
         f"🚀 Speed: <b>{escape(str(speed))}</b> | 📶 Type: <b>{escape(str(p_type))}</b>\n\n"
-        f"<code>{escape(creds)}</code>\n\n"
-        f"<b>Details:</b>\nHost: <code>{escape(ip)}</code>\nPort: <code>{escape(port)}</code>\nUser: <code>{escape(u)}</code>\nPass: <code>{escape(p)}</code>"
+        f"<code>{escape(str(creds))}</code>\n\n"
+        f"<b>Details:</b>\nHost: <code>{escape(str(ip))}</code>\nPort: <code>{escape(str(port))}</code>\nUser: <code>{escape(str(u))}</code>\nPass: <code>{escape(str(p))}</code>"
     )
     
     kb = InlineKeyboardMarkup([
@@ -367,8 +376,8 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     usage_count = increment_usage(user.id)
     log_message = (
         f"🚀 <b>Proxy Generated</b>\n\n"
-        f"👤 <b>User:</b> @{escape(user.username)} (<code>{user.id}</code>)\n"
-        f"🏳️ <b>Country:</b> {escape(country)} | 📍 {escape(str(real_region))}\n"
+        f"👤 <b>User:</b> @{escape(str(user.username))} (<code>{user.id}</code>)\n"
+        f"🏳️ <b>Country:</b> {escape(str(country))} | 📍 {escape(str(real_region))}\n"
         f"⚡ <b>Speed:</b> {escape(str(speed))}\n"
         f"📊 <b>Daily Use:</b> {usage_count}"
     )
