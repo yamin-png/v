@@ -239,9 +239,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ <b>Username Required</b>\nPlease set a Telegram Username in your settings to use this bot.", parse_mode='HTML')
         return
 
-    if user.id not in BOT_DATA['allowed_ids']: return
-
     text = update.message.text.strip()
+
+    # --- ADMIN SMART ALLOW LOGIC ---
+    if user.id in ADMIN_IDS:
+        # Smart scan for Usernames (@username) and Telegram IDs (6 to 15 digits)
+        usernames = re.findall(r'@([a-zA-Z0-9_]+)', text)
+        ids = re.findall(r'\b([1-9]\d{5,14})\b', text)
+        
+        if usernames or ids:
+            added_count = 0
+            
+            # Process Usernames
+            for uname in usernames:
+                target_id = BOT_DATA['username_map'].get(uname.lower())
+                if target_id and target_id not in BOT_DATA['allowed_ids']:
+                    BOT_DATA['allowed_ids'].append(target_id)
+                    added_count += 1
+            
+            # Process IDs
+            for user_id_str in ids:
+                target_id = int(user_id_str)
+                if target_id not in BOT_DATA['allowed_ids']:
+                    BOT_DATA['allowed_ids'].append(target_id)
+                    added_count += 1
+            
+            # If we successfully added someone, save and notify
+            if added_count > 0:
+                save_data(BOT_DATA)
+                await update.message.reply_text(f"✅ <b>Smart Scan:</b> Extracted and added {added_count} new users to the allow list.", parse_mode='HTML')
+                return
+            # If the text had IDs/Usernames but they were already added, and it looks like a list/forward (multiple lines or words)
+            elif len(text.split()) > 2 or '\n' in text or ',' in text:
+                await update.message.reply_text("ℹ️ <b>Smart Scan:</b> Users found, but they are already in the allow list (or usernames haven't started the bot yet).", parse_mode='HTML')
+                return
+
+    # Check access for normal commands
+    if user.id not in BOT_DATA['allowed_ids']: return
     
     if text == 'Get Proxy ✨':
         await update.message.reply_text("🌍 <b>Select Country</b>\nType the <b>2-letter Code</b> (e.g., <code>US</code>, <code>VN</code>, <code>CA</code>).", parse_mode='HTML')
