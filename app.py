@@ -392,6 +392,7 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     else:
         proxy_obj, error = await loop.run_in_executor(None, _sync_fetch_proxy_obj_random, country, region)
         if error:
+            USER_COOLDOWNS[user.id] = 0  # Reset cooldown on error
             try:
                 await status_msg.edit_text(f"❌ <b>Error:</b> {escape(str(error))}", parse_mode='HTML')
             except BadRequest as e:
@@ -402,6 +403,7 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
 
     creds, error = await loop.run_in_executor(None, _sync_reveal_credentials, pid)
     if error:
+        USER_COOLDOWNS[user.id] = 0  # Reset cooldown on error
         try:
             await status_msg.edit_text(f"❌ <b>Reveal Error:</b> {escape(str(error))}", parse_mode='HTML')
         except BadRequest as e:
