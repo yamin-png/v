@@ -37,6 +37,8 @@ LOG_GROUP_ID = -1003280360902
 # --- PIPRAPAY CONFIG ---
 PIPRAPAY_API_KEY = 'c1468e5c78b4051b26024fd6ec1d893c56cf329666c6189a85'
 PIPRAPAY_BASE_URL = 'https://payment.yamin.bd/api'
+# ⚠️ PAYMENT DOMAIN - Used to satisfy the API URL requirements
+PAYMENT_DOMAIN = "https://proxy.yamin.bd"
 
 # File to store usernames, cookies, usage stats, and balances
 DATA_FILE = "bot_data.json"
@@ -127,9 +129,9 @@ def _sync_create_piprapay(amount, user_id):
         'amount': str(amount),
         'currency': "BDT",
         'metadata': {'order_id': order_id},
-        'return_url': f"https://t.me/{BOT_USERNAME}", 
-        'cancel_url': f"https://t.me/{BOT_USERNAME}",
-        'webhook_url': f"https://t.me/{BOT_USERNAME}" 
+        'return_url': f"{PAYMENT_DOMAIN}/", 
+        'cancel_url': f"{PAYMENT_DOMAIN}/",
+        'webhook_url': f"{PAYMENT_DOMAIN}/" 
     }
     headers = {
         'Accept': 'application/json',
