@@ -122,6 +122,26 @@ def increment_usage(user_id):
     return user_stat['count']
 
 # --- PIPRAPAY API LOGIC (VIA PHP BRIDGE) ---
+def _call_php_bridge(payload):
+    """Helper function to cleanly handle HTTP/HTTPS fallbacks and firewall bypasses"""
+    bridge_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/javascript, */*; q=0.01',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Connection': 'keep-alive',
+        'Content-Type': 'application/json'
+    }
+    try:
+        # Attempt 1: Try HTTPS first
+        return requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15, verify=False)
+    except requests.exceptions.ConnectionError as e:
+        print(f"HTTPS connection failed, attempting HTTP fallback... ({e})")
+        # Attempt 2: If ConnectionReset (104), SSL might not be installed. Fallback to HTTP.
+        if PHP_BRIDGE_URL.startswith("https://"):
+            fallback_url = PHP_BRIDGE_URL.replace("https://", "http://")
+            return requests.post(fallback_url, json=payload, headers=bridge_headers, timeout=15)
+        raise e
+
 def _sync_create_piprapay(amount, user_id):
     order_id = f"PAY_{user_id}_{int(time.time())}"
     payload = {
@@ -131,20 +151,16 @@ def _sync_create_piprapay(amount, user_id):
         'user_id': str(user_id),
         'amount': str(amount)
     }
-    # Add a normal browser User-Agent so the PHP host doesn't block the request
-    bridge_headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
     try:
-        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15, verify=False)
-        if res.status_code == 200:
+        res = _call_php_bridge(payload)
+        if res and res.status_code == 200:
             data = res.json()
             payment_url = data.get('pp_url') or data.get('payment_url') or data.get('url')
             pp_id = data.get('bp_id') or data.get('pp_id') or data.get('id') or data.get('invoice_id')
             if payment_url and pp_id:
                 return payment_url, order_id, pp_id
         else:
-            print(f"Bridge API Error: Status {res.status_code}, Response: {res.text}")
+            print(f"Bridge API Error: Status {res.status_code if res else 'None'}, Response: {res.text if res else 'None'}")
         return None, None, None
     except Exception as e:
         print("Bridge Create Error:", e)
@@ -157,13 +173,9 @@ def _sync_verify_piprapay(order_id, pp_id):
         'order_id': order_id,
         'pp_id': pp_id
     }
-    # Add a normal browser User-Agent so the PHP host doesn't block the request
-    bridge_headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
     try:
-        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15, verify=False)
-        if res.status_code == 200:
+        res = _call_php_bridge(payload)
+        if res and res.status_code == 200:
             data = res.json()
             status = str(data.get('status', '')).upper()
             return status in ['SUCCESS', '1', 'COMPLETED', 'PAID']
