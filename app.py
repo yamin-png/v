@@ -28,11 +28,15 @@ TELEGRAM_BOT_TOKEN = "8223325004:AAEIIhDOSAOPmALWmwEHuYeaJpjlzKNGJ1k"
 # ⚠️ ADMIN IDS (List of integers)
 ADMIN_IDS = [6616624640, 5473188537]
 
-# ⚠️ LOG GROUP ID (Where reports and join requests are sent)
+# ⚠️ LOG GROUP ID (Where usage logs and join notifications are sent)
 LOG_GROUP_ID = -1003280360902
 
-# File to store allowed users, cookies, and usage stats
-DATA_FILE = "allowed_users.json"
+# --- PIPRAPAY CONFIG ---
+PIPRAPAY_API_KEY = '5a4a78500268f0e1ec5508770b12c2364c76e3e2b6bd9e0398'
+PIPRAPAY_BASE_URL = 'https://payment.yamin.bd/api'
+
+# File to store usernames, cookies, usage stats, and balances
+DATA_FILE = "bot_data.json"
 
 # --- DISHVUSOCKS CONFIG ---
 COUNTRY_OVERRIDES = {
@@ -42,7 +46,7 @@ COUNTRY_OVERRIDES = {
     'MM': 'Myanmar', 'US': 'United States'
 }
 
-DEFAULT_COOKIE = '_ga=GA1.2.907186445.1766117007; ...' # Keep your full cookie here
+DEFAULT_COOKIE = '_ga=GA1.2...; ' # Set your default cookie here
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 OPR/125.0.0.0',
@@ -55,26 +59,22 @@ HEADERS = {
 USER_COOLDOWNS = {} # {user_id: last_request_timestamp}
 
 # --- DATA MANAGEMENT ---
-
 def load_data():
     default_data = {
-        'allowed_ids': list(ADMIN_IDS), 
         'username_map': {}, 
         'cookie': DEFAULT_COOKIE,
-        'usage': {}
+        'usage': {},
+        'users': {}, # {user_id_str: {'balance': 0.0}}
+        'pending_payments': {}, # {order_id: {user_id, amount, status, pp_id}}
+        'proxy_price': 10 # Default price per proxy
     }
     if not os.path.exists(DATA_FILE):
         return default_data
     try:
         with open(DATA_FILE, 'r') as f:
             data = json.load(f)
-            # Ensure keys exist
             for key in default_data:
                 if key not in data: data[key] = default_data[key]
-            # Ensure Admins are always allowed
-            for admin_id in ADMIN_IDS:
-                if admin_id not in data['allowed_ids']:
-                    data['allowed_ids'].append(admin_id)
             return data
     except:
         return default_data
@@ -95,6 +95,12 @@ def update_headers_with_xsrf():
 
 update_headers_with_xsrf()
 
+def init_user_balance(user_id):
+    str_id = str(user_id)
+    if str_id not in BOT_DATA['users']:
+        BOT_DATA['users'][str_id] = {'balance': 0.0}
+    return BOT_DATA['users'][str_id]
+
 def increment_usage(user_id):
     today_str = str(datetime.date.today())
     str_id = str(user_id)
@@ -108,8 +114,57 @@ def increment_usage(user_id):
     save_data(BOT_DATA)
     return user_stat['count']
 
-# --- PROXY API LOGIC ---
+# --- PIPRAPAY API LOGIC ---
+def _sync_create_piprapay(amount, user_id):
+    order_id = f"PAY_{user_id}_{int(time.time())}"
+    post_data = {
+        'full_name': f"User {user_id}",
+        'email_address': f"user{user_id}@t.me",
+        'mobile_number': "01800000000",
+        'amount': str(amount),
+        'currency': "BDT",
+        'metadata': {'order_id': order_id},
+        'return_url': "https://t.me", 
+        'cancel_url': "https://t.me",
+        'webhook_url': "https://t.me" 
+    }
+    headers = {
+        'Accept': 'application/json',
+        'Mhs-Piprapay-Api-Key': PIPRAPAY_API_KEY,
+        'Content-Type': 'application/json'
+    }
+    try:
+        res = requests.post(f"{PIPRAPAY_BASE_URL}/checkout/redirect", json=post_data, headers=headers, timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            payment_url = data.get('pp_url') or data.get('payment_url') or data.get('url')
+            pp_id = data.get('bp_id') or data.get('pp_id') or data.get('id') or data.get('invoice_id')
+            if payment_url and pp_id:
+                return payment_url, order_id, pp_id
+        return None, None, None
+    except Exception as e:
+        print("PipraPay Create Error:", e)
+        return None, None, None
 
+def _sync_verify_piprapay(order_id, pp_id):
+    post_data = {'order_id': order_id, 'pp_id': pp_id}
+    headers = {
+        'Accept': 'application/json',
+        'Mhs-Piprapay-Api-Key': PIPRAPAY_API_KEY,
+        'Content-Type': 'application/json'
+    }
+    try:
+        res = requests.post(f"{PIPRAPAY_BASE_URL}/verify-payment", json=post_data, headers=headers, timeout=15)
+        if res.status_code == 200:
+            data = res.json()
+            status = str(data.get('status', '')).upper()
+            return status in ['SUCCESS', '1', 'COMPLETED', 'PAID']
+        return False
+    except Exception as e:
+        print("PipraPay Verify Error:", e)
+        return False
+
+# --- PROXY API LOGIC ---
 def _sync_get_available_proxies(country_full_name):
     url = "https://dichvusocks.net/api/socks/data"
     params = {
@@ -181,108 +236,156 @@ def get_full_country_name(code_or_name):
     return code_or_name.title()
 
 # --- HANDLERS ---
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
-    # --- USERNAME CHECK ---
     if not user.username:
         await update.message.reply_text(
-            "⚠️ <b>Username Required</b>\n\n"
-            "You do not have a Telegram Username set. For security reasons, you cannot use this bot without one.\n\n"
-            "<b>How to set a username:</b>\n"
-            "1. Go to Telegram Settings.\n"
-            "2. Edit Profile / Username.\n"
-            "3. Set a unique username and try /start again.",
+            "⚠️ <b>Username Required</b>\n\nYou do not have a Telegram Username set. For security reasons, you cannot use this bot without one.",
             parse_mode='HTML'
         )
         return
 
-    # Save user to map
+    # Save user to map & init balance
     BOT_DATA['username_map'][user.username.lower()] = user.id
+    init_user_balance(user.id)
     save_data(BOT_DATA)
 
-    # 1. NOTIFY ADMINS OF NEW JOIN
-    user_mention = f"@{escape(str(user.username))}"
     log_msg = (
         f"🔔 <b>New User Joined</b>\n\n"
-        f"👤 <b>User:</b> {user_mention}\n"
-        f"📛 <b>First Name:</b> {escape(str(user.first_name))}\n"
-        f"📛 <b>Last Name:</b> {escape(str(user.last_name or 'N/A'))}\n"
+        f"👤 <b>User:</b> @{escape(str(user.username))}\n"
         f"🆔 <b>ID:</b> <code>{user.id}</code>"
     )
     
-    # Admin Buttons
-    kb_btns = []
-    if user.id not in BOT_DATA['allowed_ids']:
-        kb_btns.append(InlineKeyboardButton("✅ Allow User", callback_data=f"allow_user_{user.id}"))
-    
-    # Always include Ban button in log group
-    kb_btns.append(InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_user_{user.id}"))
-    
-    kb = InlineKeyboardMarkup([kb_btns])
-    
-    await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_msg, reply_markup=kb, parse_mode='HTML')
+    try:
+        await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_msg, parse_mode='HTML')
+    except Exception:
+        pass
 
-    # 2. Check access
-    if user.id not in BOT_DATA['allowed_ids']:
-        await update.message.reply_text(f"⌛ <b>Your request has been sent to admins.</b>\nPlease wait for approval. ID: <code>{user.id}</code>", parse_mode='HTML')
-        return
-
-    markup = ReplyKeyboardMarkup([['Get Proxy ✨']], resize_keyboard=True)
-    await update.message.reply_text("👋 <b>Welcome Back!</b>\nClick <b>Get Proxy</b> to start.", reply_markup=markup, parse_mode='HTML')
+    markup = ReplyKeyboardMarkup([
+        ['Get Proxy ✨', '💳 Add Balance'],
+        ['👤 Profile']
+    ], resize_keyboard=True)
+    await update.message.reply_text("👋 <b>Welcome!</b>\nSelect an option below to start.", reply_markup=markup, parse_mode='HTML')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    if not user.username: return
     
-    if not user.username:
-        await update.message.reply_text("⚠️ <b>Username Required</b>\nPlease set a Telegram Username in your settings to use this bot.", parse_mode='HTML')
-        return
-
     text = update.message.text.strip()
-
-    # --- ADMIN SMART ALLOW LOGIC ---
-    if user.id in ADMIN_IDS:
-        # Smart scan for Usernames (@username) and Telegram IDs (6 to 15 digits)
-        usernames = re.findall(r'@([a-zA-Z0-9_]+)', text)
-        ids = re.findall(r'\b([1-9]\d{5,14})\b', text)
-        
-        if usernames or ids:
-            added_count = 0
-            
-            # Process Usernames
-            for uname in usernames:
-                target_id = BOT_DATA['username_map'].get(uname.lower())
-                if target_id and target_id not in BOT_DATA['allowed_ids']:
-                    BOT_DATA['allowed_ids'].append(target_id)
-                    added_count += 1
-            
-            # Process IDs
-            for user_id_str in ids:
-                target_id = int(user_id_str)
-                if target_id not in BOT_DATA['allowed_ids']:
-                    BOT_DATA['allowed_ids'].append(target_id)
-                    added_count += 1
-            
-            # If we successfully added someone, save and notify
-            if added_count > 0:
-                save_data(BOT_DATA)
-                await update.message.reply_text(f"✅ <b>Smart Scan:</b> Extracted and added {added_count} new users to the allow list.", parse_mode='HTML')
-                return
-            # If the text had IDs/Usernames but they were already added, and it looks like a list/forward (multiple lines or words)
-            elif len(text.split()) > 2 or '\n' in text or ',' in text:
-                await update.message.reply_text("ℹ️ <b>Smart Scan:</b> Users found, but they are already in the allow list (or usernames haven't started the bot yet).", parse_mode='HTML')
-                return
-
-    # Check access for normal commands
-    if user.id not in BOT_DATA['allowed_ids']: return
     
+    # 1. State: Awaiting Deposit Amount
+    if context.user_data.get('state') == 'awaiting_deposit':
+        try:
+            amount = float(text)
+            if amount < 10:
+                await update.message.reply_text("⚠️ Minimum deposit amount is 10 TK. Try again:")
+                return
+            
+            msg = await update.message.reply_text("⏳ Generating payment link...")
+            loop = asyncio.get_running_loop()
+            payment_url, order_id, pp_id = await loop.run_in_executor(None, _sync_create_piprapay, amount, user.id)
+            
+            if payment_url and order_id:
+                # Save Pending Payment
+                BOT_DATA['pending_payments'][order_id] = {
+                    'user_id': user.id, 'amount': amount, 'status': 'pending', 'pp_id': pp_id
+                }
+                save_data(BOT_DATA)
+                
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(f"💳 Pay {amount} TK", url=payment_url)],
+                    [InlineKeyboardButton("✅ Check Payment", callback_data=f"checkpay_{order_id}")]
+                ])
+                await msg.edit_text(f"🔗 <b>Payment Link Created!</b>\n\nClick the button below to pay <b>{amount} TK</b>. After completing the payment, click <b>Check Payment</b>.", reply_markup=kb, parse_mode='HTML')
+            else:
+                await msg.edit_text("❌ Payment Gateway Error. Please try again later.")
+                
+            context.user_data['state'] = None
+            return
+        except ValueError:
+            await update.message.reply_text("❌ Please enter a valid number.")
+            return
+
+    # 2. State: Awaiting Credit Amount (Admin)
+    if context.user_data.get('state') == 'awaiting_credit_amount' and user.id in ADMIN_IDS:
+        try:
+            amount = float(text)
+            target = context.user_data.get('credit_target')
+            
+            # Resolve Target (Username or ID)
+            target_id = None
+            if target.startswith('@'):
+                target_id = BOT_DATA['username_map'].get(target[1:].lower())
+            elif target.isdigit():
+                target_id = int(target)
+                
+            if not target_id:
+                await update.message.reply_text("❌ Could not find user. Make sure they have started the bot.")
+                context.user_data['state'] = None
+                return
+                
+            init_user_balance(target_id)
+            BOT_DATA['users'][str(target_id)]['balance'] += amount
+            save_data(BOT_DATA)
+            
+            await update.message.reply_text(f"✅ Successfully added <b>{amount} TK</b> to user <code>{target_id}</code>.", parse_mode='HTML')
+            try:
+                await context.bot.send_message(chat_id=target_id, text=f"💰 <b>Funds Added!</b>\nAdmin has credited <b>{amount} TK</b> to your account.", parse_mode='HTML')
+            except: pass
+            
+            context.user_data['state'] = None
+            return
+        except ValueError:
+            await update.message.reply_text("❌ Please enter a valid number.")
+            return
+
+    # Standard Button Actions
     if text == 'Get Proxy ✨':
         await update.message.reply_text("🌍 <b>Select Country</b>\nType the <b>2-letter Code</b> (e.g., <code>US</code>, <code>VN</code>, <code>CA</code>).", parse_mode='HTML')
+        return
+        
+    elif text == '💳 Add Balance':
+        context.user_data['state'] = 'awaiting_deposit'
+        await update.message.reply_text("💰 <b>How much TK do you want to add?</b>\n\nEnter the amount below (Min 10):", parse_mode='HTML')
+        return
+        
+    elif text == '👤 Profile':
+        init_user_balance(user.id)
+        bal = round(BOT_DATA['users'][str(user.id)]['balance'], 2)
+        price = BOT_DATA.get('proxy_price', 10)
+        
+        msg = (
+            f"👤 <b>Your Profile</b>\n\n"
+            f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
+            f"💰 <b>Balance:</b> {bal} TK\n"
+            f"🚀 <b>Proxy Cost:</b> {price} TK per IP\n"
+        )
+        await update.message.reply_text(msg, parse_mode='HTML')
         return
 
     if len(text) == 2 or len(text) > 3:
         await process_country_selection(update.message, text, context)
+
+async def cmd_credit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS: return
+    try:
+        target = context.args[0]
+        context.user_data['credit_target'] = target
+        context.user_data['state'] = 'awaiting_credit_amount'
+        await update.message.reply_text(f"💰 Target selected: <b>{target}</b>\n\nEnter the amount to credit (You can use negative numbers to deduct):", parse_mode='HTML')
+    except IndexError:
+        await update.message.reply_text("⚙️ <b>Usage:</b>\n<code>/credit @username</code> OR <code>/credit 123456789</code>", parse_mode='HTML')
+
+async def cmd_set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id not in ADMIN_IDS: return
+    try:
+        price = float(context.args[0])
+        BOT_DATA['proxy_price'] = price
+        save_data(BOT_DATA)
+        await update.message.reply_text(f"✅ <b>Success:</b> Proxy price updated to {price} TK.", parse_mode='HTML')
+    except:
+        await update.message.reply_text("⚙️ <b>Usage:</b>\n<code>/setprice 10.5</code>", parse_mode='HTML')
 
 async def process_country_selection(message_obj, country_input, context):
     full_name = get_full_country_name(country_input)
@@ -350,39 +453,47 @@ async def show_region_page(message_obj, page, context):
         if "Message is not modified" not in str(e): raise e
 
 async def process_proxy_fetch(message_obj, country, region, context, user, proxy_id=None, is_edit=True):
-    # Safety Check: If country is missing due to session loss
+    # 1. Safety Check
     if not country:
         error_text = "❌ <b>Session Lost:</b> Please select a country again by clicking 'Get Proxy ✨'."
         if is_edit and hasattr(message_obj, 'edit_text'):
-            try:
-                await message_obj.edit_text(error_text, parse_mode='HTML')
-            except BadRequest as e:
-                if "Message is not modified" not in str(e): raise e
-        else:
-            await context.bot.send_message(chat_id=user.id, text=error_text, parse_mode='HTML')
+            try: await message_obj.edit_text(error_text, parse_mode='HTML')
+            except: pass
+        else: await context.bot.send_message(chat_id=user.id, text=error_text, parse_mode='HTML')
         return
 
+    # 2. Balance Check (Do not deduct yet!)
+    price = BOT_DATA.get('proxy_price', 10)
+    user_str = str(user.id)
+    init_user_balance(user.id)
+    
+    if BOT_DATA['users'][user_str]['balance'] < price:
+        err = f"❌ <b>Insufficient Balance!</b>\n\n💰 Your balance: <b>{BOT_DATA['users'][user_str]['balance']} TK</b>\n🚀 Proxy Price: <b>{price} TK</b>\n\nPlease click <b>💳 Add Balance</b> to top up."
+        if is_edit and hasattr(message_obj, 'edit_text'):
+            try: await message_obj.edit_text(err, parse_mode='HTML')
+            except: pass
+        else: await context.bot.send_message(chat_id=user.id, text=err, parse_mode='HTML')
+        return
+
+    # 3. Cooldown Check
     now = time.time()
     last_req = USER_COOLDOWNS.get(user.id, 0)
-    if now - last_req < 30:
-        remaining = int(30 - (now - last_req))
-        await context.bot.send_message(chat_id=user.id, text=f"⏳ <b>Cooldown active!</b>\nPlease wait <b>{remaining} seconds</b> before generating another proxy.", parse_mode='HTML')
+    if now - last_req < 10: # Shortened cooldown to 10 seconds
+        remaining = int(10 - (now - last_req))
+        await context.bot.send_message(chat_id=user.id, text=f"⏳ Please wait <b>{remaining} seconds</b>...", parse_mode='HTML')
         return
-
     USER_COOLDOWNS[user.id] = now
 
-    status_msg = None
+    status_msg = message_obj
     if is_edit and hasattr(message_obj, 'edit_text'):
-        try:
-            status_msg = await message_obj.edit_text("⏳ Unlocking proxy...", parse_mode='HTML')
-        except BadRequest as e:
-            if "Message is not modified" not in str(e): raise e
-            status_msg = message_obj
+        try: status_msg = await message_obj.edit_text("⏳ Unlocking proxy...", parse_mode='HTML')
+        except: pass
     else:
         status_msg = await context.bot.send_message(chat_id=user.id, text="⏳ Unlocking proxy...", parse_mode='HTML')
 
     loop = asyncio.get_running_loop()
     
+    # 4. Fetch Proxy Details
     if proxy_id:
         pid = proxy_id
         p_list = context.user_data.get('regions_list', [])
@@ -392,35 +503,37 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     else:
         proxy_obj, error = await loop.run_in_executor(None, _sync_fetch_proxy_obj_random, country, region)
         if error:
-            USER_COOLDOWNS[user.id] = 0  # Reset cooldown on error
-            try:
-                await status_msg.edit_text(f"❌ <b>Error:</b> {escape(str(error))}", parse_mode='HTML')
-            except BadRequest as e:
-                if "Message is not modified" not in str(e): raise e
-            return
+            USER_COOLDOWNS[user.id] = 0
+            try: await status_msg.edit_text(f"❌ <b>Error:</b> {escape(str(error))}", parse_mode='HTML')
+            except: pass
+            return # Exit safely. NO BALANCE DEDUCTED
+            
         pid, speed, p_type, real_region = proxy_obj['Id'], proxy_obj.get('Speed', 'N/A'), proxy_obj.get('useType', 'N/A'), proxy_obj.get('Region', region)
         context.user_data['last_region'] = real_region
 
+    # 5. Reveal Proxy Credentials
     creds, error = await loop.run_in_executor(None, _sync_reveal_credentials, pid)
     if error:
-        USER_COOLDOWNS[user.id] = 0  # Reset cooldown on error
-        try:
-            await status_msg.edit_text(f"❌ <b>Reveal Error:</b> {escape(str(error))}", parse_mode='HTML')
-        except BadRequest as e:
-            if "Message is not modified" not in str(e): raise e
-        return
+        USER_COOLDOWNS[user.id] = 0 
+        try: await status_msg.edit_text(f"❌ <b>Reveal Error:</b> {escape(str(error))}", parse_mode='HTML')
+        except: pass
+        return # Exit safely. NO BALANCE DEDUCTED
 
-    try:
-        ip, port, u, p = creds.split(':')
-    except:
-        ip, port, u, p = "N/A", "N/A", "N/A", "N/A"
+    # --- SUCCESS! Deduct Balance ---
+    BOT_DATA['users'][user_str]['balance'] -= price
+    save_data(BOT_DATA)
+    new_bal = round(BOT_DATA['users'][user_str]['balance'], 2)
+
+    try: ip, port, u, p = creds.split(':')
+    except: ip, port, u, p = "N/A", "N/A", "N/A", "N/A"
 
     final_text = (
         f"✅ <b>{escape(str(country))} Proxy Generated</b>\n"
         f"📍 Region: {escape(str(real_region))}\n"
         f"🚀 Speed: <b>{escape(str(speed))}</b> | 📶 Type: <b>{escape(str(p_type))}</b>\n\n"
         f"<code>{escape(str(creds))}</code>\n\n"
-        f"<b>Details:</b>\nHost: <code>{escape(str(ip))}</code>\nPort: <code>{escape(str(port))}</code>\nUser: <code>{escape(str(u))}</code>\nPass: <code>{escape(str(p))}</code>"
+        f"<b>Details:</b>\nHost: <code>{escape(str(ip))}</code>\nPort: <code>{escape(str(port))}</code>\nUser: <code>{escape(str(u))}</code>\nPass: <code>{escape(str(p))}</code>\n\n"
+        f"<i>💰 New Balance: {new_bal} TK (-{price} TK)</i>"
     )
     
     kb = InlineKeyboardMarkup([
@@ -429,25 +542,19 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
         [InlineKeyboardButton("🌍 Change Country", callback_data="change_country")]
     ])
     
-    try:
-        await status_msg.edit_text(final_text, parse_mode='HTML', reply_markup=kb)
-    except BadRequest as e:
-        if "Message is not modified" not in str(e): raise e
+    try: await status_msg.edit_text(final_text, parse_mode='HTML', reply_markup=kb)
+    except: pass
 
     # --- LOGGING ---
     usage_count = increment_usage(user.id)
     log_message = (
-        f"🚀 <b>Proxy Generated</b>\n\n"
+        f"🚀 <b>Proxy Generated</b>\n"
         f"👤 <b>User:</b> @{escape(str(user.username))} (<code>{user.id}</code>)\n"
         f"🏳️ <b>Country:</b> {escape(str(country))} | 📍 {escape(str(real_region))}\n"
-        f"⚡ <b>Speed:</b> {escape(str(speed))}\n"
-        f"📊 <b>Daily Use:</b> {usage_count}"
+        f"💰 <b>Spent:</b> {price} TK"
     )
-    
-    # Log group markup with Ban button
-    log_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_user_{user.id}")]])
-    
-    await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_message, reply_markup=log_kb, parse_mode='HTML')
+    try: await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_message, parse_mode='HTML')
+    except: pass
 
 async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -458,55 +565,39 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⚠️ Username Required!", show_alert=True)
         return
 
-    # Admin: Allow User
-    if action.startswith('allow_user_'):
-        if user.id not in ADMIN_IDS:
-            await query.answer("🚫 Admin Only", show_alert=True)
+    # Handle Check Payment Verification
+    if action.startswith('checkpay_'):
+        order_id = action.split('_')[1]
+        order = BOT_DATA['pending_payments'].get(order_id)
+        
+        if not order:
+            await query.answer("❌ Order not found.", show_alert=True)
             return
-        target_id = int(action.split('_')[2])
-        if target_id not in BOT_DATA['allowed_ids']:
-            BOT_DATA['allowed_ids'].append(target_id)
+            
+        if order['status'] == 'completed':
+            await query.answer("✅ This payment was already completed!", show_alert=True)
+            return
+            
+        loop = asyncio.get_running_loop()
+        is_paid = await loop.run_in_executor(None, _sync_verify_piprapay, order_id, order['pp_id'])
+        
+        if is_paid:
+            # Add balance
+            amount = order['amount']
+            init_user_balance(order['user_id'])
+            BOT_DATA['users'][str(order['user_id'])]['balance'] += amount
+            BOT_DATA['pending_payments'][order_id]['status'] = 'completed'
             save_data(BOT_DATA)
-            await query.answer("✅ User Allowed")
-            # Update log message to show it was approved
+            
+            await query.answer("🎉 Payment Verified! Balance added.", show_alert=True)
             try:
-                await query.message.edit_text(f"{query.message.text_html}\n\n✅ <b>APPROVED BY ADMIN</b>", parse_mode='HTML')
-            except BadRequest as e:
-                if "Message is not modified" not in str(e): raise e
-            try:
-                await context.bot.send_message(chat_id=target_id, text="✅ <b>Access Granted!</b>\nYour account has been approved. Click /start to begin.", parse_mode='HTML')
+                await query.message.edit_text(f"✅ <b>Payment Successful!</b>\n\n<b>{amount} TK</b> has been successfully added to your balance.", parse_mode='HTML')
             except: pass
-        return
-
-    # Admin: Ban User
-    if action.startswith('ban_user_'):
-        if user.id not in ADMIN_IDS:
-            await query.answer("🚫 Admin Only", show_alert=True)
-            return
-        target_id = int(action.split('_')[2])
-        if target_id in BOT_DATA['allowed_ids']:
-            BOT_DATA['allowed_ids'].remove(target_id)
-            save_data(BOT_DATA)
-        
-        await query.answer("🚫 Banned")
-        # Update message in group to show banned status
-        try:
-            await query.message.edit_text(f"{query.message.text_html}\n\n🚫 <b>BANNED BY ADMIN</b>", parse_mode='HTML')
-        except BadRequest as e:
-            if "Message is not modified" not in str(e): raise e
-        
-        # Notify User
-        try:
-            await context.bot.send_message(chat_id=target_id, text=f"🚫 <b>You have been banned.</b>\n\n<b>Reason:</b> Violation of terms or suspicious activity.\nContact an admin if you believe this is a mistake.", parse_mode='HTML')
-        except: pass
-        return
-
-    if user.id not in BOT_DATA['allowed_ids']:
-        await query.answer("🚫 Access Denied", show_alert=True)
+        else:
+            await query.answer("⏳ Payment not found or pending. Please wait a minute and try again.", show_alert=True)
         return
 
     country = context.user_data.get('country_full')
-    
     if action.startswith('reg_page_'):
         await show_region_page(query.message, int(action.split('_')[2]), context)
     elif action.startswith('sel_id_'):
@@ -518,18 +609,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == 'back_to_regions':
         await show_region_page(query.message, 1, context)
     elif action == 'change_country':
-        try:
-            await query.message.edit_text("🌍 <b>Select Country</b>\nType the 2-letter Code.", parse_mode='HTML')
-        except BadRequest as e:
-            if "Message is not modified" not in str(e): raise e
+        try: await query.message.edit_text("🌍 <b>Select Country</b>\nType the 2-letter Code.", parse_mode='HTML')
+        except: pass
 
     await query.answer()
-
-async def reset_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS: return
-    BOT_DATA['allowed_ids'] = list(ADMIN_IDS)
-    save_data(BOT_DATA)
-    await update.message.reply_text("✅ All users reset to admins only.")
 
 async def update_cookie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS: return
@@ -546,8 +629,9 @@ if __name__ == '__main__':
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     
     application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('reset', reset_users))
     application.add_handler(CommandHandler('new', update_cookie))
+    application.add_handler(CommandHandler('credit', cmd_credit))
+    application.add_handler(CommandHandler('setprice', cmd_set_price))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(CallbackQueryHandler(button_click))
 
