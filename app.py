@@ -32,7 +32,7 @@ ADMIN_IDS = [6616624640, 5473188537]
 LOG_GROUP_ID = -1003280360902
 
 # --- PIPRAPAY CONFIG ---
-PIPRAPAY_API_KEY = '5a4a78500268f0e1ec5508770b12c2364c76e3e2b6bd9e0398'
+PIPRAPAY_API_KEY = 'c1468e5c78b4051b26024fd6ec1d893c56cf329666c6189a85'
 PIPRAPAY_BASE_URL = 'https://payment.yamin.bd/api'
 
 # File to store usernames, cookies, usage stats, and balances
