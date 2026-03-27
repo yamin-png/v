@@ -177,8 +177,18 @@ def _sync_verify_piprapay(order_id, pp_id):
         res = _call_php_bridge(payload)
         if res and res.status_code == 200:
             data = res.json()
+            print(f"Payment Verify Debug: {data}") # Log response to VPS console for debugging
+            
+            # Check main status
             status = str(data.get('status', '')).upper()
-            return status in ['SUCCESS', '1', 'COMPLETED', 'PAID']
+            
+            # Check nested data status (some API versions use this)
+            data_status = ''
+            if isinstance(data.get('data'), dict):
+                data_status = str(data.get('data').get('status', '')).upper()
+                
+            valid_statuses = ['SUCCESS', '1', 'COMPLETED', 'PAID', 'TRUE']
+            return status in valid_statuses or data_status in valid_statuses
         return False
     except Exception as e:
         print("Bridge Verify Error:", e)
@@ -367,7 +377,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif text == '💳 Add Balance':
         context.user_data['state'] = 'awaiting_deposit'
-        await update.message.reply_text("💰 <b>How much TK do you want to add?</b>\n\nEnter the amount below (Min 10):", parse_mode='HTML')
+        # Added Cancel button for deposit
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_deposit")]])
+        await update.message.reply_text("💰 <b>How much TK do you want to add?</b>\n\nEnter the amount below (Min 10):", parse_mode='HTML', reply_markup=kb)
         return
         
     elif text == '👤 Profile':
@@ -583,6 +595,15 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not user.username:
         await query.answer("⚠️ Username Required!", show_alert=True)
+        return
+
+    # Handle Deposit Cancellation
+    if action == 'cancel_deposit':
+        context.user_data['state'] = None
+        await query.answer("Cancelled")
+        try:
+            await query.message.edit_text("❌ <b>Deposit cancelled.</b>", parse_mode='HTML')
+        except: pass
         return
 
     # Handle Check Payment Verification
