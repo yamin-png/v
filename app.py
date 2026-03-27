@@ -608,7 +608,8 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Handle Check Payment Verification
     if action.startswith('checkpay_'):
-        order_id = action.split('_')[1]
+        # FIX: Replace 'checkpay_' rather than splitting by '_' to get the full Order ID!
+        order_id = action.replace('checkpay_', '')
         order = BOT_DATA['pending_payments'].get(order_id)
         
         if not order:
