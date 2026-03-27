@@ -73,6 +73,7 @@ def load_data():
         'usage': {},
         'users': {}, # {user_id_str: {'balance': 0.0}}
         'pending_payments': {}, # {order_id: {user_id, amount, status, pp_id}}
+        'manual_payments': {}, # {order_id: {user_id, amount, trx_id, status}}
         'proxy_price': 10 # Default price per proxy
     }
     if not os.path.exists(DATA_FILE):
@@ -316,7 +317,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user.username: return
     
-    text = update.message.text.strip()
+    # Safely extract text, since the message might be a photo now
+    text = update.message.text.strip() if update.message.text else ""
     
     # --- COMMAND INTERCEPTION (Prevents getting stuck) ---
     main_commands = ['Get Proxy ✨', '💳 Add Balance', '👤 Profile', '💸 Transfer', '⚙️ Admin Menu']
@@ -328,9 +330,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
             
         elif text == '💳 Add Balance':
-            context.user_data['state'] = 'awaiting_deposit'
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-            await update.message.reply_text("💰 <b>How much TK do you want to add?</b>\n\nEnter the amount below (Min 10):", parse_mode='HTML', reply_markup=kb)
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚡ PipraPay (Auto)", callback_data="pay_piprapay")],
+                [InlineKeyboardButton("🟡 Binance (Manual)", callback_data="pay_binance")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]
+            ])
+            await update.message.reply_text("💳 <b>Select Payment Method:</b>", parse_mode='HTML', reply_markup=kb)
             return
             
         elif text == '👤 Profile':
@@ -367,7 +372,70 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- STATE HANDLING ---
     state = context.user_data.get('state')
     
-    # 1. State: Awaiting Deposit Amount
+    # 0. State: Awaiting Binance Screenshot (Must handle Photos)
+    if state == 'awaiting_binance_ss':
+        if not update.message.photo:
+            await update.message.reply_text("❌ Please send a screenshot (photo) of your Binance transaction.")
+            return
+            
+        photo_file_id = update.message.photo[-1].file_id
+        amount = context.user_data.get('binance_amount')
+        trx_id = context.user_data.get('binance_trx')
+        
+        order_id = f"MAN_{user.id}_{int(time.time())}"
+        BOT_DATA.setdefault('manual_payments', {})[order_id] = {
+            'user_id': user.id,
+            'amount': amount,
+            'trx_id': trx_id,
+            'status': 'pending'
+        }
+        save_data(BOT_DATA)
+        
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Approve", callback_data=f"man_approve_{order_id}"),
+             InlineKeyboardButton("❌ Reject", callback_data=f"man_reject_{order_id}")]
+        ])
+        
+        caption = (
+            f"🟡 <b>Manual Binance Payment</b>\n\n"
+            f"👤 <b>User:</b> @{user.username} (<code>{user.id}</code>)\n"
+            f"💰 <b>Amount:</b> {amount} TK\n"
+            f"🧾 <b>Order/Trx ID:</b> <code>{trx_id}</code>"
+        )
+        
+        await context.bot.send_photo(chat_id=LOG_GROUP_ID, photo=photo_file_id, caption=caption, parse_mode='HTML', reply_markup=kb)
+        await update.message.reply_text("✅ <b>Payment Submitted!</b>\n\nYour screenshot and transaction ID have been sent to the admins. Your balance will be updated automatically upon approval.", parse_mode='HTML')
+        context.user_data['state'] = None
+        return
+
+    # 1. State: Awaiting Binance Amount
+    if state == 'awaiting_binance_amount':
+        try:
+            amount = float(text)
+            if amount <= 0:
+                await update.message.reply_text("❌ Amount must be greater than 0.")
+                return
+            context.user_data['binance_amount'] = amount
+            context.user_data['state'] = 'awaiting_binance_trx'
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+            await update.message.reply_text(f"💰 Amount set to <b>{amount} TK</b>.\n\nPlease transfer this amount to Binance UID: <code>805398719</code>\n\nAfter transferring, please enter your <b>Order ID</b> (Transaction Hash/ID):", parse_mode='HTML', reply_markup=kb)
+            return
+        except ValueError:
+            await update.message.reply_text("❌ Please enter a valid number.")
+            return
+
+    # 2. State: Awaiting Binance Trx ID
+    if state == 'awaiting_binance_trx':
+        if not text:
+            await update.message.reply_text("❌ Please enter a valid Order ID.")
+            return
+        context.user_data['binance_trx'] = text
+        context.user_data['state'] = 'awaiting_binance_ss'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        await update.message.reply_text("📸 <b>Almost done!</b>\n\nPlease upload a <b>Screenshot</b> of your successful Binance transaction:", parse_mode='HTML', reply_markup=kb)
+        return
+        
+    # 3. State: Awaiting Deposit Amount (PipraPay)
     if state == 'awaiting_deposit':
         try:
             amount = float(text)
@@ -713,7 +781,71 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.edit_text("❌ <b>Action cancelled.</b>", parse_mode='HTML')
         except: pass
         return
+
+    # Handle Payment Selection
+    if action == 'pay_piprapay':
+        context.user_data['state'] = 'awaiting_deposit'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        await query.message.edit_text("💰 <b>How much TK do you want to add?</b>\n\nEnter the amount below (Min 10):", parse_mode='HTML', reply_markup=kb)
+        return
         
+    if action == 'pay_binance':
+        context.user_data['state'] = 'awaiting_binance_amount'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        await query.message.edit_text("🟡 <b>Binance Payment</b>\n\nBinance UID: <code>805398719</code>\n\nHow much TK are you depositing?", parse_mode='HTML', reply_markup=kb)
+        return
+
+    # Handle Manual Payment Admin Approval
+    if action.startswith('man_approve_') and user.id in ADMIN_IDS:
+        order_id = action.replace('man_approve_', '')
+        order = BOT_DATA.get('manual_payments', {}).get(order_id)
+        
+        if not order:
+            await query.answer("❌ Order not found.", show_alert=True)
+            return
+        if order['status'] != 'pending':
+            await query.answer(f"⚠️ Order already {order['status']}!", show_alert=True)
+            return
+            
+        order['status'] = 'approved'
+        amount = order['amount']
+        target_id = order['user_id']
+        
+        init_user_balance(target_id)
+        BOT_DATA['users'][str(target_id)]['balance'] += amount
+        save_data(BOT_DATA)
+        
+        await query.answer("✅ Approved!")
+        new_caption = (query.message.caption_html or "") + "\n\n✅ <b>APPROVED</b> by Admin"
+        try: await query.message.edit_caption(caption=new_caption, parse_mode='HTML')
+        except: pass
+        try: await context.bot.send_message(chat_id=target_id, text=f"🎉 <b>Payment Approved!</b>\n\nYour manual deposit of <b>{amount} TK</b> has been verified and added to your balance.", parse_mode='HTML')
+        except: pass
+        return
+
+    # Handle Manual Payment Admin Rejection
+    if action.startswith('man_reject_') and user.id in ADMIN_IDS:
+        order_id = action.replace('man_reject_', '')
+        order = BOT_DATA.get('manual_payments', {}).get(order_id)
+        
+        if not order:
+            await query.answer("❌ Order not found.", show_alert=True)
+            return
+        if order['status'] != 'pending':
+            await query.answer(f"⚠️ Order already {order['status']}!", show_alert=True)
+            return
+            
+        order['status'] = 'rejected'
+        save_data(BOT_DATA)
+        
+        await query.answer("❌ Rejected!")
+        new_caption = (query.message.caption_html or "") + "\n\n❌ <b>REJECTED</b> by Admin"
+        try: await query.message.edit_caption(caption=new_caption, parse_mode='HTML')
+        except: pass
+        try: await context.bot.send_message(chat_id=order['user_id'], text=f"❌ <b>Payment Rejected!</b>\n\nYour manual deposit for Order ID <code>{order['trx_id']}</code> was rejected by the admin. Contact support if you think this is a mistake.", parse_mode='HTML')
+        except: pass
+        return
+
     # Handle Admin Menu Callbacks
     if action == 'admin_credit' and user.id in ADMIN_IDS:
         context.user_data['state'] = 'awaiting_admin_credit_target'
@@ -795,7 +927,8 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('new', update_cookie))
     application.add_handler(CommandHandler('credit', cmd_credit))
     application.add_handler(CommandHandler('setprice', cmd_set_price))
-    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    # NOTE: Added filters.PHOTO so the bot can receive the Binance Screenshots!
+    application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & (~filters.COMMAND), handle_message))
     application.add_handler(CallbackQueryHandler(button_click))
 
     print("Bot is starting...")
