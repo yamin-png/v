@@ -265,6 +265,23 @@ def get_full_country_name(code_or_name):
         except: pass
     return code_or_name.title()
 
+def resolve_user(target_str):
+    target_str = target_str.strip()
+    if target_str.startswith('@'):
+        return BOT_DATA['username_map'].get(target_str[1:].lower())
+    elif target_str.isdigit():
+        return int(target_str)
+    return None
+
+def get_main_keyboard(user_id):
+    kb = [
+        ['Get Proxy ✨', '💳 Add Balance'],
+        ['👤 Profile', '💸 Transfer']
+    ]
+    if user_id in ADMIN_IDS:
+        kb.append(['⚙️ Admin Menu'])
+    return ReplyKeyboardMarkup(kb, resize_keyboard=True)
+
 # --- HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -292,10 +309,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    markup = ReplyKeyboardMarkup([
-        ['Get Proxy ✨', '💳 Add Balance'],
-        ['👤 Profile']
-    ], resize_keyboard=True)
+    markup = get_main_keyboard(user.id)
     await update.message.reply_text("👋 <b>Welcome!</b>\nSelect an option below to start.", reply_markup=markup, parse_mode='HTML')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -304,8 +318,57 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     text = update.message.text.strip()
     
+    # --- COMMAND INTERCEPTION (Prevents getting stuck) ---
+    main_commands = ['Get Proxy ✨', '💳 Add Balance', '👤 Profile', '💸 Transfer', '⚙️ Admin Menu']
+    if text in main_commands:
+        context.user_data['state'] = None # Clear any pending states
+        
+        if text == 'Get Proxy ✨':
+            await update.message.reply_text("🌍 <b>Select Country</b>\nType the <b>2-letter Code</b> (e.g., <code>US</code>, <code>VN</code>, <code>CA</code>).", parse_mode='HTML')
+            return
+            
+        elif text == '💳 Add Balance':
+            context.user_data['state'] = 'awaiting_deposit'
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+            await update.message.reply_text("💰 <b>How much TK do you want to add?</b>\n\nEnter the amount below (Min 10):", parse_mode='HTML', reply_markup=kb)
+            return
+            
+        elif text == '👤 Profile':
+            init_user_balance(user.id)
+            bal = round(BOT_DATA['users'][str(user.id)]['balance'], 2)
+            price = BOT_DATA.get('proxy_price', 10)
+            
+            msg = (
+                f"👤 <b>Your Profile</b>\n\n"
+                f"🆔 <b>User ID:</b> <code>{user.id}</code>\n"
+                f"👤 <b>Username:</b> @{user.username}\n"
+                f"💰 <b>Balance:</b> {bal} TK\n"
+                f"🚀 <b>Proxy Cost:</b> {price} TK per IP\n"
+            )
+            await update.message.reply_text(msg, parse_mode='HTML')
+            return
+            
+        elif text == '💸 Transfer':
+            context.user_data['state'] = 'awaiting_transfer_target'
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+            await update.message.reply_text("💸 <b>Transfer Balance</b>\n\nEnter the Telegram <b>@username</b> or <b>User ID</b> of the recipient:", parse_mode='HTML', reply_markup=kb)
+            return
+            
+        elif text == '⚙️ Admin Menu' and user.id in ADMIN_IDS:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Credit User", callback_data="admin_credit")],
+                [InlineKeyboardButton("💰 Set Proxy Price", callback_data="admin_setprice")]
+            ])
+            await update.message.reply_text("⚙️ <b>Admin Control Panel</b>\n\nSelect an option:", reply_markup=kb, parse_mode='HTML')
+            return
+            
+        return # Ensure it stops processing here for main commands
+    
+    # --- STATE HANDLING ---
+    state = context.user_data.get('state')
+    
     # 1. State: Awaiting Deposit Amount
-    if context.user_data.get('state') == 'awaiting_deposit':
+    if state == 'awaiting_deposit':
         try:
             amount = float(text)
             if amount < 10:
@@ -337,24 +400,75 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Please enter a valid number.")
             return
 
-    # 2. State: Awaiting Credit Amount (Admin)
-    if context.user_data.get('state') == 'awaiting_credit_amount' and user.id in ADMIN_IDS:
+    # 2. State: Transfer Feature
+    if state == 'awaiting_transfer_target':
+        target_id = resolve_user(text)
+        if not target_id:
+            await update.message.reply_text("❌ Could not find user. Make sure the username is correct and they have started the bot.")
+            context.user_data['state'] = None
+            return
+        
+        if str(target_id) == str(user.id):
+            await update.message.reply_text("❌ You cannot transfer to yourself.")
+            context.user_data['state'] = None
+            return
+
+        context.user_data['transfer_target'] = target_id
+        context.user_data['state'] = 'awaiting_transfer_amount'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        await update.message.reply_text(f"💸 Recipient selected: <code>{target_id}</code>\n\nEnter the amount of TK to transfer:", parse_mode='HTML', reply_markup=kb)
+        return
+
+    if state == 'awaiting_transfer_amount':
         try:
             amount = float(text)
-            target = context.user_data.get('credit_target')
+            if amount <= 0:
+                await update.message.reply_text("❌ Amount must be greater than 0.")
+                return
             
-            # Resolve Target (Username or ID)
-            target_id = None
-            if target.startswith('@'):
-                target_id = BOT_DATA['username_map'].get(target[1:].lower())
-            elif target.isdigit():
-                target_id = int(target)
-                
-            if not target_id:
-                await update.message.reply_text("❌ Could not find user. Make sure they have started the bot.")
+            init_user_balance(user.id)
+            if BOT_DATA['users'][str(user.id)]['balance'] < amount:
+                await update.message.reply_text("❌ Insufficient balance for this transfer.")
                 context.user_data['state'] = None
                 return
-                
+
+            target_id = context.user_data.get('transfer_target')
+            init_user_balance(target_id)
+            
+            BOT_DATA['users'][str(user.id)]['balance'] -= amount
+            BOT_DATA['users'][str(target_id)]['balance'] += amount
+            save_data(BOT_DATA)
+            
+            await update.message.reply_text(f"✅ Successfully transferred <b>{amount} TK</b> to user <code>{target_id}</code>.", parse_mode='HTML')
+            try:
+                await context.bot.send_message(chat_id=target_id, text=f"💰 <b>Funds Received!</b>\nYou received a transfer of <b>{amount} TK</b> from <code>{user.id}</code> (@{user.username}).", parse_mode='HTML')
+            except: pass
+            
+            context.user_data['state'] = None
+            return
+        except ValueError:
+            await update.message.reply_text("❌ Please enter a valid number.")
+            return
+
+    # 3. State: Admin Credit User
+    if state == 'awaiting_admin_credit_target' and user.id in ADMIN_IDS:
+        target_id = resolve_user(text)
+        if not target_id:
+            await update.message.reply_text("❌ Could not find user. Make sure they have started the bot.")
+            context.user_data['state'] = None
+            return
+            
+        context.user_data['credit_target'] = target_id
+        context.user_data['state'] = 'awaiting_admin_credit_amount'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        await update.message.reply_text(f"💰 Target selected: <code>{target_id}</code>\n\nEnter the amount to credit (use negative numbers to deduct):", parse_mode='HTML', reply_markup=kb)
+        return
+
+    if state == 'awaiting_admin_credit_amount' and user.id in ADMIN_IDS:
+        try:
+            amount = float(text)
+            target_id = context.user_data.get('credit_target')
+            
             init_user_balance(target_id)
             BOT_DATA['users'][str(target_id)]['balance'] += amount
             save_data(BOT_DATA)
@@ -370,42 +484,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Please enter a valid number.")
             return
 
-    # Standard Button Actions
-    if text == 'Get Proxy ✨':
-        await update.message.reply_text("🌍 <b>Select Country</b>\nType the <b>2-letter Code</b> (e.g., <code>US</code>, <code>VN</code>, <code>CA</code>).", parse_mode='HTML')
-        return
-        
-    elif text == '💳 Add Balance':
-        context.user_data['state'] = 'awaiting_deposit'
-        # Added Cancel button for deposit
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_deposit")]])
-        await update.message.reply_text("💰 <b>How much TK do you want to add?</b>\n\nEnter the amount below (Min 10):", parse_mode='HTML', reply_markup=kb)
-        return
-        
-    elif text == '👤 Profile':
-        init_user_balance(user.id)
-        bal = round(BOT_DATA['users'][str(user.id)]['balance'], 2)
-        price = BOT_DATA.get('proxy_price', 10)
-        
-        msg = (
-            f"👤 <b>Your Profile</b>\n\n"
-            f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
-            f"💰 <b>Balance:</b> {bal} TK\n"
-            f"🚀 <b>Proxy Cost:</b> {price} TK per IP\n"
-        )
-        await update.message.reply_text(msg, parse_mode='HTML')
-        return
+    # 4. State: Admin Set Price
+    if state == 'awaiting_admin_set_price' and user.id in ADMIN_IDS:
+        try:
+            price = float(text)
+            if price < 0:
+                await update.message.reply_text("❌ Price cannot be negative.")
+                return
+            BOT_DATA['proxy_price'] = price
+            save_data(BOT_DATA)
+            await update.message.reply_text(f"✅ <b>Success:</b> Proxy price updated to {price} TK.", parse_mode='HTML')
+            context.user_data['state'] = None
+            return
+        except ValueError:
+            await update.message.reply_text("❌ Please enter a valid number.")
+            return
 
+    # Normal text processing (e.g. 2-letter country code)
     if len(text) == 2 or len(text) > 3:
         await process_country_selection(update.message, text, context)
 
 async def cmd_credit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS: return
     try:
-        target = context.args[0]
+        target = resolve_user(context.args[0])
+        if not target:
+            await update.message.reply_text("❌ Could not find user.")
+            return
         context.user_data['credit_target'] = target
-        context.user_data['state'] = 'awaiting_credit_amount'
-        await update.message.reply_text(f"💰 Target selected: <b>{target}</b>\n\nEnter the amount to credit (You can use negative numbers to deduct):", parse_mode='HTML')
+        context.user_data['state'] = 'awaiting_admin_credit_amount'
+        await update.message.reply_text(f"💰 Target selected: <b>{target}</b>\n\nEnter the amount to credit (use negative numbers to deduct):", parse_mode='HTML')
     except IndexError:
         await update.message.reply_text("⚙️ <b>Usage:</b>\n<code>/credit @username</code> OR <code>/credit 123456789</code>", parse_mode='HTML')
 
@@ -597,13 +705,26 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("⚠️ Username Required!", show_alert=True)
         return
 
-    # Handle Deposit Cancellation
-    if action == 'cancel_deposit':
+    # Handle Deposit/Action Cancellation
+    if action in ['cancel_deposit', 'cancel_action']:
         context.user_data['state'] = None
         await query.answer("Cancelled")
         try:
-            await query.message.edit_text("❌ <b>Deposit cancelled.</b>", parse_mode='HTML')
+            await query.message.edit_text("❌ <b>Action cancelled.</b>", parse_mode='HTML')
         except: pass
+        return
+        
+    # Handle Admin Menu Callbacks
+    if action == 'admin_credit' and user.id in ADMIN_IDS:
+        context.user_data['state'] = 'awaiting_admin_credit_target'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        await query.message.edit_text("💳 <b>Credit User</b>\n\nEnter the Telegram <b>@username</b> or <b>User ID</b> of the target:", parse_mode='HTML', reply_markup=kb)
+        return
+        
+    if action == 'admin_setprice' and user.id in ADMIN_IDS:
+        context.user_data['state'] = 'awaiting_admin_set_price'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        await query.message.edit_text(f"💰 <b>Set Proxy Price</b>\n\nCurrent Price: {BOT_DATA.get('proxy_price', 10)} TK\n\nEnter the new price:", parse_mode='HTML', reply_markup=kb)
         return
 
     # Handle Check Payment Verification
