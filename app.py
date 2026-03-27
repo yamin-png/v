@@ -25,6 +25,9 @@ from telegram.ext import (
 # --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8223325004:AAEIIhDOSAOPmALWmwEHuYeaJpjlzKNGJ1k"
 
+# ⚠️ BOT USERNAME (Without @) - Used to redirect users back to the bot after payment
+BOT_USERNAME = "Ismailproxybot"
+
 # ⚠️ ADMIN IDS (List of integers)
 ADMIN_IDS = [6616624640, 5473188537]
 
@@ -124,9 +127,9 @@ def _sync_create_piprapay(amount, user_id):
         'amount': str(amount),
         'currency': "BDT",
         'metadata': {'order_id': order_id},
-        'return_url': "https://t.me", 
-        'cancel_url': "https://t.me",
-        'webhook_url': "https://t.me" 
+        'return_url': f"https://t.me/{BOT_USERNAME}", 
+        'cancel_url': f"https://t.me/{BOT_USERNAME}",
+        'webhook_url': f"https://t.me/{BOT_USERNAME}" 
     }
     headers = {
         'Accept': 'application/json',
