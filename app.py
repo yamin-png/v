@@ -9,6 +9,7 @@ import datetime
 import pycountry
 import math
 import time
+import urllib3
 from html import escape
 from urllib.parse import unquote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -21,6 +22,9 @@ from telegram.ext import (
     MessageHandler,
     filters
 )
+
+# Suppress insecure request warnings from urllib3 (since we are using verify=False)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8223325004:AAEIIhDOSAOPmALWmwEHuYeaJpjlzKNGJ1k"
@@ -139,13 +143,16 @@ def _sync_create_piprapay(amount, user_id):
         'Content-Type': 'application/json'
     }
     try:
-        res = requests.post(f"{PIPRAPAY_BASE_URL}/checkout/redirect", json=post_data, headers=headers, timeout=15)
+        # Added verify=False to ignore SSL certificate validation errors
+        res = requests.post(f"{PIPRAPAY_BASE_URL}/checkout/redirect", json=post_data, headers=headers, timeout=15, verify=False)
         if res.status_code == 200:
             data = res.json()
             payment_url = data.get('pp_url') or data.get('payment_url') or data.get('url')
             pp_id = data.get('bp_id') or data.get('pp_id') or data.get('id') or data.get('invoice_id')
             if payment_url and pp_id:
                 return payment_url, order_id, pp_id
+        else:
+            print(f"PipraPay API Error: Status {res.status_code}, Response: {res.text}")
         return None, None, None
     except Exception as e:
         print("PipraPay Create Error:", e)
@@ -159,7 +166,8 @@ def _sync_verify_piprapay(order_id, pp_id):
         'Content-Type': 'application/json'
     }
     try:
-        res = requests.post(f"{PIPRAPAY_BASE_URL}/verify-payment", json=post_data, headers=headers, timeout=15)
+        # Added verify=False to ignore SSL certificate validation errors
+        res = requests.post(f"{PIPRAPAY_BASE_URL}/verify-payment", json=post_data, headers=headers, timeout=15, verify=False)
         if res.status_code == 200:
             data = res.json()
             status = str(data.get('status', '')).upper()
