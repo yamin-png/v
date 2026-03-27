@@ -38,11 +38,9 @@ ADMIN_IDS = [6616624640, 5473188537]
 # ⚠️ LOG GROUP ID (Where usage logs and join notifications are sent)
 LOG_GROUP_ID = -1003280360902
 
-# --- PIPRAPAY CONFIG ---
-PIPRAPAY_API_KEY = 'c1468e5c78b4051b26024fd6ec1d893c56cf329666c6189a85'
-PIPRAPAY_BASE_URL = 'https://payment.yamin.bd/api'
-# ⚠️ PAYMENT DOMAIN - Used to satisfy the API URL requirements
-PAYMENT_DOMAIN = "https://proxy.yamin.bd"
+# --- PIPRAPAY PHP BRIDGE CONFIG ---
+PHP_BRIDGE_URL = 'https://proxy.yamin.bd/api.php'
+PHP_BRIDGE_SECRET = 'rubel_proxy_secret_2026' # Must match the $SECRET_TOKEN in api.php
 
 # File to store usernames, cookies, usage stats, and balances
 DATA_FILE = "bot_data.json"
@@ -123,28 +121,18 @@ def increment_usage(user_id):
     save_data(BOT_DATA)
     return user_stat['count']
 
-# --- PIPRAPAY API LOGIC ---
+# --- PIPRAPAY API LOGIC (VIA PHP BRIDGE) ---
 def _sync_create_piprapay(amount, user_id):
     order_id = f"PAY_{user_id}_{int(time.time())}"
-    post_data = {
-        'full_name': f"User {user_id}",
-        'email_address': f"user{user_id}@t.me",
-        'mobile_number': "01800000000",
-        'amount': str(amount),
-        'currency': "BDT",
-        'metadata': {'order_id': order_id},
-        'return_url': f"{PAYMENT_DOMAIN}/", 
-        'cancel_url': f"{PAYMENT_DOMAIN}/",
-        'webhook_url': f"{PAYMENT_DOMAIN}/" 
-    }
-    headers = {
-        'Accept': 'application/json',
-        'Mhs-Piprapay-Api-Key': PIPRAPAY_API_KEY,
-        'Content-Type': 'application/json'
+    payload = {
+        'secret': PHP_BRIDGE_SECRET,
+        'action': 'create',
+        'order_id': order_id,
+        'user_id': str(user_id),
+        'amount': str(amount)
     }
     try:
-        # Added verify=False to ignore SSL certificate validation errors
-        res = requests.post(f"{PIPRAPAY_BASE_URL}/checkout/redirect", json=post_data, headers=headers, timeout=15, verify=False)
+        res = requests.post(PHP_BRIDGE_URL, json=payload, timeout=15, verify=False)
         if res.status_code == 200:
             data = res.json()
             payment_url = data.get('pp_url') or data.get('payment_url') or data.get('url')
@@ -152,29 +140,28 @@ def _sync_create_piprapay(amount, user_id):
             if payment_url and pp_id:
                 return payment_url, order_id, pp_id
         else:
-            print(f"PipraPay API Error: Status {res.status_code}, Response: {res.text}")
+            print(f"Bridge API Error: Status {res.status_code}, Response: {res.text}")
         return None, None, None
     except Exception as e:
-        print("PipraPay Create Error:", e)
+        print("Bridge Create Error:", e)
         return None, None, None
 
 def _sync_verify_piprapay(order_id, pp_id):
-    post_data = {'order_id': order_id, 'pp_id': pp_id}
-    headers = {
-        'Accept': 'application/json',
-        'Mhs-Piprapay-Api-Key': PIPRAPAY_API_KEY,
-        'Content-Type': 'application/json'
+    payload = {
+        'secret': PHP_BRIDGE_SECRET,
+        'action': 'verify',
+        'order_id': order_id,
+        'pp_id': pp_id
     }
     try:
-        # Added verify=False to ignore SSL certificate validation errors
-        res = requests.post(f"{PIPRAPAY_BASE_URL}/verify-payment", json=post_data, headers=headers, timeout=15, verify=False)
+        res = requests.post(PHP_BRIDGE_URL, json=payload, timeout=15, verify=False)
         if res.status_code == 200:
             data = res.json()
             status = str(data.get('status', '')).upper()
             return status in ['SUCCESS', '1', 'COMPLETED', 'PAID']
         return False
     except Exception as e:
-        print("PipraPay Verify Error:", e)
+        print("Bridge Verify Error:", e)
         return False
 
 # --- PROXY API LOGIC ---
