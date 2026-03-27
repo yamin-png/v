@@ -131,8 +131,12 @@ def _sync_create_piprapay(amount, user_id):
         'user_id': str(user_id),
         'amount': str(amount)
     }
+    # Add a normal browser User-Agent so the PHP host doesn't block the request
+    bridge_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
     try:
-        res = requests.post(PHP_BRIDGE_URL, json=payload, timeout=15, verify=False)
+        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15, verify=False)
         if res.status_code == 200:
             data = res.json()
             payment_url = data.get('pp_url') or data.get('payment_url') or data.get('url')
@@ -153,8 +157,12 @@ def _sync_verify_piprapay(order_id, pp_id):
         'order_id': order_id,
         'pp_id': pp_id
     }
+    # Add a normal browser User-Agent so the PHP host doesn't block the request
+    bridge_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
     try:
-        res = requests.post(PHP_BRIDGE_URL, json=payload, timeout=15, verify=False)
+        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15, verify=False)
         if res.status_code == 200:
             data = res.json()
             status = str(data.get('status', '')).upper()
