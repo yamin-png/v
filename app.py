@@ -23,16 +23,16 @@ from telegram.ext import (
     filters
 )
 
-# Suppress insecure request warnings from urllib3 (since we are using verify=False)
+# Suppress insecure request warnings from urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8223325004:AAEIIhDOSAOPmALWmwEHuYeaJpjlzKNGJ1k"
 
-# ⚠️ BOT USERNAME (Without @) - Used to redirect users back to the bot after payment
+# ⚠️ BOT USERNAME (Without @)
 BOT_USERNAME = "Ismailproxybot"
 
-# ⚠️ ADMIN IDS (List of integers)
+# ⚠️ ADMIN IDS
 ADMIN_IDS = [6616624640, 5473188537]
 
 # ⚠️ LOG GROUP ID (Where usage logs and join notifications are sent)
@@ -40,7 +40,7 @@ LOG_GROUP_ID = -1003280360902
 
 # --- PIPRAPAY PHP BRIDGE CONFIG ---
 PHP_BRIDGE_URL = 'https://proxy.yamin.bd/api.php'
-PHP_BRIDGE_SECRET = 'rubel_proxy_secret_2026' # Must match the $SECRET_TOKEN in api.php
+PHP_BRIDGE_SECRET = 'rubel_proxy_secret_2026'
 
 # File to store usernames, cookies, usage stats, and balances
 DATA_FILE = "bot_data.json"
@@ -53,7 +53,7 @@ COUNTRY_OVERRIDES = {
     'MM': 'Myanmar', 'US': 'United States'
 }
 
-DEFAULT_COOKIE = '_ga=GA1.2...; ' # Set your default cookie here
+DEFAULT_COOKIE = '_ga=GA1.2...; '
 
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 OPR/125.0.0.0',
@@ -62,19 +62,16 @@ HEADERS = {
     'Referer': 'https://dichvusocks.net/sockslist',
 }
 
-# --- GLOBAL STATE ---
-USER_COOLDOWNS = {} # {user_id: last_request_timestamp}
-
 # --- DATA MANAGEMENT ---
 def load_data():
     default_data = {
         'username_map': {}, 
         'cookie': DEFAULT_COOKIE,
         'usage': {},
-        'users': {}, # {user_id_str: {'balance': 0.0}}
-        'pending_payments': {}, # {order_id: {user_id, amount, status, pp_id}}
-        'manual_payments': {}, # {order_id: {user_id, amount, trx_id, status}}
-        'proxy_price': 10 # Default price per proxy
+        'users': {}, 
+        'pending_payments': {}, 
+        'manual_payments': {}, 
+        'proxy_price': 10 
     }
     if not os.path.exists(DATA_FILE):
         return default_data
@@ -122,27 +119,7 @@ def increment_usage(user_id):
     save_data(BOT_DATA)
     return user_stat['count']
 
-# --- PIPRAPAY API LOGIC (VIA PHP BRIDGE) ---
-def _call_php_bridge(payload):
-    """Helper function to cleanly handle HTTP/HTTPS fallbacks and firewall bypasses"""
-    bridge_headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Connection': 'keep-alive',
-        'Content-Type': 'application/json'
-    }
-    try:
-        # Attempt 1: Try HTTPS first
-        return requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15, verify=False)
-    except requests.exceptions.ConnectionError as e:
-        print(f"HTTPS connection failed, attempting HTTP fallback... ({e})")
-        # Attempt 2: If ConnectionReset (104), SSL might not be installed. Fallback to HTTP.
-        if PHP_BRIDGE_URL.startswith("https://"):
-            fallback_url = PHP_BRIDGE_URL.replace("https://", "http://")
-            return requests.post(fallback_url, json=payload, headers=bridge_headers, timeout=15)
-        raise e
-
+# --- PIPRAPAY API LOGIC ---
 def _sync_create_piprapay(amount, user_id):
     order_id = f"PAY_{user_id}_{int(time.time())}"
     payload = {
@@ -152,20 +129,33 @@ def _sync_create_piprapay(amount, user_id):
         'user_id': str(user_id),
         'amount': str(amount)
     }
+    bridge_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+    }
     try:
-        res = _call_php_bridge(payload)
-        if res and res.status_code == 200:
+        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15, verify=False)
+        if res.status_code == 200:
             data = res.json()
             payment_url = data.get('pp_url') or data.get('payment_url') or data.get('url')
             pp_id = data.get('bp_id') or data.get('pp_id') or data.get('id') or data.get('invoice_id')
             if payment_url and pp_id:
                 return payment_url, order_id, pp_id
-        else:
-            print(f"Bridge API Error: Status {res.status_code if res else 'None'}, Response: {res.text if res else 'None'}")
-        return None, None, None
     except Exception as e:
-        print("Bridge Create Error:", e)
-        return None, None, None
+        # Fallback to HTTP if HTTPS fails
+        if PHP_BRIDGE_URL.startswith("https://"):
+            try:
+                fallback_url = PHP_BRIDGE_URL.replace("https://", "http://")
+                res = requests.post(fallback_url, json=payload, headers=bridge_headers, timeout=15)
+                if res.status_code == 200:
+                    data = res.json()
+                    payment_url = data.get('pp_url') or data.get('payment_url') or data.get('url')
+                    pp_id = data.get('bp_id') or data.get('pp_id') or data.get('id') or data.get('invoice_id')
+                    if payment_url and pp_id:
+                        return payment_url, order_id, pp_id
+            except: pass
+    return None, None, None
 
 def _sync_verify_piprapay(order_id, pp_id):
     payload = {
@@ -174,26 +164,17 @@ def _sync_verify_piprapay(order_id, pp_id):
         'order_id': order_id,
         'pp_id': pp_id
     }
+    bridge_headers = {'Content-Type': 'application/json'}
     try:
-        res = _call_php_bridge(payload)
-        if res and res.status_code == 200:
+        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15, verify=False)
+        if res.status_code == 200:
             data = res.json()
-            print(f"Payment Verify Debug: {data}") # Log response to VPS console for debugging
-            
-            # Check main status
             status = str(data.get('status', '')).upper()
-            
-            # Check nested data status (some API versions use this)
-            data_status = ''
-            if isinstance(data.get('data'), dict):
-                data_status = str(data.get('data').get('status', '')).upper()
-                
+            data_status = str(data.get('data', {}).get('status', '')).upper() if isinstance(data.get('data'), dict) else ''
             valid_statuses = ['SUCCESS', '1', 'COMPLETED', 'PAID', 'TRUE']
             return status in valid_statuses or data_status in valid_statuses
-        return False
-    except Exception as e:
-        print("Bridge Verify Error:", e)
-        return False
+    except: pass
+    return False
 
 # --- PROXY API LOGIC ---
 def _sync_get_available_proxies(country_full_name):
@@ -289,53 +270,71 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not user.username:
         await update.message.reply_text(
-            "⚠️ <b>Username Required</b>\n\nYou do not have a Telegram Username set. For security reasons, you cannot use this bot without one.",
+            "⚠️ <b>Username Required</b>\n━━━━━━━━━━━━━━━━━━━━\nYou do not have a Telegram Username set. For security reasons, you cannot use this bot without one.",
             parse_mode='HTML'
         )
         return
 
-    # Save user to map & init balance
     BOT_DATA['username_map'][user.username.lower()] = user.id
     init_user_balance(user.id)
     save_data(BOT_DATA)
 
     log_msg = (
-        f"🔔 <b>New User Joined</b>\n\n"
+        f"🔔 <b>New User Joined</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"👤 <b>User:</b> @{escape(str(user.username))}\n"
         f"🆔 <b>ID:</b> <code>{user.id}</code>"
     )
-    
     try:
         await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_msg, parse_mode='HTML')
-    except Exception:
-        pass
+    except: pass
 
     markup = get_main_keyboard(user.id)
-    await update.message.reply_text("👋 <b>Welcome!</b>\nSelect an option below to start.", reply_markup=markup, parse_mode='HTML')
+    welcome_msg = (
+        f"👋 <b>Welcome to Ismail Proxy Bot!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Get high-speed, premium proxies instantly.\n"
+        f"Select an option from the menu below to begin! 👇"
+    )
+    await update.message.reply_text(welcome_msg, reply_markup=markup, parse_mode='HTML')
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user.username: return
     
-    # Safely extract text, since the message might be a photo now
     text = update.message.text.strip() if update.message.text else ""
     
-    # --- COMMAND INTERCEPTION (Prevents getting stuck) ---
+    # --- COMMAND INTERCEPTION ---
     main_commands = ['Get Proxy ✨', '💳 Add Balance', '👤 Profile', '💸 Transfer', '⚙️ Admin Menu']
     if text in main_commands:
-        context.user_data['state'] = None # Clear any pending states
+        context.user_data['state'] = None 
         
         if text == 'Get Proxy ✨':
-            await update.message.reply_text("🌍 <b>Select Country</b>\nType the <b>2-letter Code</b> (e.g., <code>US</code>, <code>VN</code>, <code>CA</code>).", parse_mode='HTML')
+            msg = (
+                "🌍 <b>SELECT A COUNTRY</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "Type the <b>2-letter Country Code</b> or full name.\n\n"
+                "<i>Examples:</i>\n"
+                "🇺🇸 <code>US</code> for United States\n"
+                "🇬🇧 <code>GB</code> for United Kingdom\n"
+                "🇻🇳 <code>VN</code> for Vietnam"
+            )
+            await update.message.reply_text(msg, parse_mode='HTML')
             return
             
         elif text == '💳 Add Balance':
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("⚡ PipraPay (Auto)", callback_data="pay_piprapay")],
+                [InlineKeyboardButton("⚡ PipraPay (Auto Deposit)", callback_data="pay_piprapay")],
                 [InlineKeyboardButton("🟡 Binance (Manual)", callback_data="pay_binance")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]
             ])
-            await update.message.reply_text("💳 <b>Select Payment Method:</b>", parse_mode='HTML', reply_markup=kb)
+            msg = (
+                "💳 <b>ADD BALANCE</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "Choose your preferred payment method below.\n"
+                "Auto-payments are credited <b>instantly</b>! ⚡"
+            )
+            await update.message.reply_text(msg, parse_mode='HTML', reply_markup=kb)
             return
             
         elif text == '👤 Profile':
@@ -344,11 +343,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             price = BOT_DATA.get('proxy_price', 10)
             
             msg = (
-                f"👤 <b>Your Profile</b>\n\n"
-                f"🆔 <b>User ID:</b> <code>{user.id}</code>\n"
-                f"👤 <b>Username:</b> @{user.username}\n"
-                f"💰 <b>Balance:</b> {bal} TK\n"
-                f"🚀 <b>Proxy Cost:</b> {price} TK per IP\n"
+                f"👤 <b>USER PROFILE</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🆔 <b>Account ID:</b> <code>{user.id}</code>\n"
+                f"🪪 <b>Username:</b> @{user.username}\n"
+                f"💰 <b>Current Balance:</b> <b>{bal} TK</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🚀 <b>Proxy Price:</b> {price} TK / IP\n"
             )
             await update.message.reply_text(msg, parse_mode='HTML')
             return
@@ -356,7 +357,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == '💸 Transfer':
             context.user_data['state'] = 'awaiting_transfer_target'
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-            await update.message.reply_text("💸 <b>Transfer Balance</b>\n\nEnter the Telegram <b>@username</b> or <b>User ID</b> of the recipient:", parse_mode='HTML', reply_markup=kb)
+            msg = (
+                "💸 <b>TRANSFER BALANCE</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "Enter the Telegram <b>@username</b> or <b>User ID</b> of the recipient:"
+            )
+            await update.message.reply_text(msg, parse_mode='HTML', reply_markup=kb)
             return
             
         elif text == '⚙️ Admin Menu' and user.id in ADMIN_IDS:
@@ -364,18 +370,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("💳 Credit User", callback_data="admin_credit")],
                 [InlineKeyboardButton("💰 Set Proxy Price", callback_data="admin_setprice")]
             ])
-            await update.message.reply_text("⚙️ <b>Admin Control Panel</b>\n\nSelect an option:", reply_markup=kb, parse_mode='HTML')
+            await update.message.reply_text("⚙️ <b>Admin Control Panel</b>\n━━━━━━━━━━━━━━━━━━━━\nSelect an option below:", reply_markup=kb, parse_mode='HTML')
             return
             
-        return # Ensure it stops processing here for main commands
+        return 
     
     # --- STATE HANDLING ---
     state = context.user_data.get('state')
     
-    # 0. State: Awaiting Binance Screenshot (Must handle Photos)
+    # 0. State: Awaiting Binance Screenshot
     if state == 'awaiting_binance_ss':
         if not update.message.photo:
-            await update.message.reply_text("❌ Please send a screenshot (photo) of your Binance transaction.")
+            await update.message.reply_text("❌ <b>Error:</b> Please send a screenshot (photo) of your Binance transaction.", parse_mode='HTML')
             return
             
         photo_file_id = update.message.photo[-1].file_id
@@ -397,14 +403,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
         
         caption = (
-            f"🟡 <b>Manual Binance Payment</b>\n\n"
-            f"👤 <b>User:</b> @{user.username} (<code>{user.id}</code>)\n"
-            f"💰 <b>Amount:</b> {amount} TK\n"
-            f"🧾 <b>Order/Trx ID:</b> <code>{trx_id}</code>"
+            f"🟡 <b>Manual Binance Payment Request</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 User: @{user.username} (<code>{user.id}</code>)\n"
+            f"💰 Amount: <b>{amount} TK</b>\n"
+            f"🧾 Trx ID: <code>{trx_id}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Status: Pending Admin Review"
         )
         
         await context.bot.send_photo(chat_id=LOG_GROUP_ID, photo=photo_file_id, caption=caption, parse_mode='HTML', reply_markup=kb)
-        await update.message.reply_text("✅ <b>Payment Submitted!</b>\n\nYour screenshot and transaction ID have been sent to the admins. Your balance will be updated automatically upon approval.", parse_mode='HTML')
+        
+        success_msg = (
+            "✅ <b>PAYMENT SUBMITTED!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Your screenshot and Transaction ID have been sent to the admins for verification.\n\n"
+            "<i>Your balance will be updated automatically upon approval.</i>"
+        )
+        await update.message.reply_text(success_msg, parse_mode='HTML')
         context.user_data['state'] = None
         return
 
@@ -418,7 +434,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data['binance_amount'] = amount
             context.user_data['state'] = 'awaiting_binance_trx'
             kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-            await update.message.reply_text(f"💰 Amount set to <b>{amount} TK</b>.\n\nPlease transfer this amount to Binance UID: <code>805398719</code>\n\nAfter transferring, please enter your <b>Order ID</b> (Transaction Hash/ID):", parse_mode='HTML', reply_markup=kb)
+            msg = (
+                f"🟡 <b>BINANCE DEPOSIT</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"💰 Deposit Amount: <b>{amount} TK</b>\n\n"
+                f"Please transfer this amount to Binance UID: <code>805398719</code>\n\n"
+                f"After transferring, please enter your <b>Order ID</b> (Transaction Hash/ID):"
+            )
+            await update.message.reply_text(msg, parse_mode='HTML', reply_markup=kb)
             return
         except ValueError:
             await update.message.reply_text("❌ Please enter a valid number.")
@@ -432,7 +455,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['binance_trx'] = text
         context.user_data['state'] = 'awaiting_binance_ss'
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-        await update.message.reply_text("📸 <b>Almost done!</b>\n\nPlease upload a <b>Screenshot</b> of your successful Binance transaction:", parse_mode='HTML', reply_markup=kb)
+        msg = (
+            "📸 <b>ALMOST DONE!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Please upload a <b>Screenshot</b> of your successful Binance transaction as proof:"
+        )
+        await update.message.reply_text(msg, parse_mode='HTML', reply_markup=kb)
         return
         
     # 3. State: Awaiting Deposit Amount (PipraPay)
@@ -440,27 +468,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             amount = float(text)
             if amount < 10:
-                await update.message.reply_text("⚠️ Minimum deposit amount is 10 TK. Try again:")
+                await update.message.reply_text("⚠️ <b>Minimum deposit amount is 10 TK.</b> Try again:", parse_mode='HTML')
                 return
             
-            msg = await update.message.reply_text("⏳ Generating payment link...")
+            msg = await update.message.reply_text("⏳ <i>Generating secure payment link...</i>", parse_mode='HTML')
             loop = asyncio.get_running_loop()
+            
             payment_url, order_id, pp_id = await loop.run_in_executor(None, _sync_create_piprapay, amount, user.id)
             
             if payment_url and order_id:
-                # Save Pending Payment
                 BOT_DATA['pending_payments'][order_id] = {
                     'user_id': user.id, 'amount': amount, 'status': 'pending', 'pp_id': pp_id
                 }
+                
+                admin_msg = (
+                    f"⚡ <b>Auto Payment Initiated</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 User: <code>{user.id}</code> (@{user.username})\n"
+                    f"💰 Amount: <b>{amount} TK</b>\n"
+                    f"🆔 Order: <code>{order_id}</code>\n"
+                    f"🔗 <a href='{payment_url}'>View Payment Page</a>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Status: Pending Auto Verification"
+                )
+                
+                admin_kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ Approve Manually", callback_data=f"pdec_a_{order_id}"),
+                     InlineKeyboardButton("❌ Reject", callback_data=f"pdec_r_{order_id}")]
+                ])
+                
+                res_msg = await context.bot.send_message(chat_id=LOG_GROUP_ID, text=admin_msg, parse_mode='HTML', reply_markup=admin_kb)
+                BOT_DATA['pending_payments'][order_id]['log_msg_id'] = res_msg.message_id
                 save_data(BOT_DATA)
                 
-                kb = InlineKeyboardMarkup([
+                user_kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton(f"💳 Pay {amount} TK", url=payment_url)],
-                    [InlineKeyboardButton("✅ Check Payment", callback_data=f"checkpay_{order_id}")]
+                    [InlineKeyboardButton("✅ Check Payment Status", callback_data=f"checkpay_{order_id}")]
                 ])
-                await msg.edit_text(f"🔗 <b>Payment Link Created!</b>\n\nClick the button below to pay <b>{amount} TK</b>. After completing the payment, click <b>Check Payment</b>.", reply_markup=kb, parse_mode='HTML')
+                
+                payment_text = (
+                    f"🔗 <b>PAYMENT LINK GENERATED!</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"Click the button below to pay <b>{amount} TK</b>.\n\n"
+                    f"<i>After completing the payment, make sure to click <b>Check Payment Status</b>.</i>"
+                )
+                await msg.edit_text(payment_text, reply_markup=user_kb, parse_mode='HTML')
             else:
-                await msg.edit_text("❌ Payment Gateway Error. Please try again later.")
+                await msg.edit_text("❌ <b>Payment Gateway Error.</b> Please try again later.", parse_mode='HTML')
                 
             context.user_data['state'] = None
             return
@@ -468,7 +522,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Please enter a valid number.")
             return
 
-    # 2. State: Transfer Feature
+    # 4. State: Transfer Feature
     if state == 'awaiting_transfer_target':
         target_id = resolve_user(text)
         if not target_id:
@@ -477,14 +531,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         if str(target_id) == str(user.id):
-            await update.message.reply_text("❌ You cannot transfer to yourself.")
+            await update.message.reply_text("❌ You cannot transfer funds to yourself.")
             context.user_data['state'] = None
             return
 
         context.user_data['transfer_target'] = target_id
         context.user_data['state'] = 'awaiting_transfer_amount'
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-        await update.message.reply_text(f"💸 Recipient selected: <code>{target_id}</code>\n\nEnter the amount of TK to transfer:", parse_mode='HTML', reply_markup=kb)
+        
+        transfer_msg = (
+            f"💸 <b>TRANSFER BALANCE</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Recipient:</b> <code>{target_id}</code>\n\n"
+            f"🔢 Enter the amount of TK you want to transfer:"
+        )
+        await update.message.reply_text(transfer_msg, parse_mode='HTML', reply_markup=kb)
         return
 
     if state == 'awaiting_transfer_amount':
@@ -496,7 +557,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             init_user_balance(user.id)
             if BOT_DATA['users'][str(user.id)]['balance'] < amount:
-                await update.message.reply_text("❌ Insufficient balance for this transfer.")
+                await update.message.reply_text("❌ <b>Insufficient balance</b> for this transfer.", parse_mode='HTML')
                 context.user_data['state'] = None
                 return
 
@@ -507,9 +568,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             BOT_DATA['users'][str(target_id)]['balance'] += amount
             save_data(BOT_DATA)
             
-            await update.message.reply_text(f"✅ Successfully transferred <b>{amount} TK</b> to user <code>{target_id}</code>.", parse_mode='HTML')
+            success_msg = (
+                f"✅ <b>TRANSFER SUCCESSFUL!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"💸 <b>Amount:</b> {amount} TK\n"
+                f"👤 <b>Sent to:</b> <code>{target_id}</code>"
+            )
+            await update.message.reply_text(success_msg, parse_mode='HTML')
             try:
-                await context.bot.send_message(chat_id=target_id, text=f"💰 <b>Funds Received!</b>\nYou received a transfer of <b>{amount} TK</b> from <code>{user.id}</code> (@{user.username}).", parse_mode='HTML')
+                receive_msg = (
+                    f"💰 <b>FUNDS RECEIVED!</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"You have received a transfer of <b>{amount} TK</b>.\n"
+                    f"👤 <b>From:</b> <code>{user.id}</code> (@{user.username})"
+                )
+                await context.bot.send_message(chat_id=target_id, text=receive_msg, parse_mode='HTML')
             except: pass
             
             context.user_data['state'] = None
@@ -518,7 +591,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Please enter a valid number.")
             return
 
-    # 3. State: Admin Credit User
+    # 5. State: Admin Credit User
     if state == 'awaiting_admin_credit_target' and user.id in ADMIN_IDS:
         target_id = resolve_user(text)
         if not target_id:
@@ -552,7 +625,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Please enter a valid number.")
             return
 
-    # 4. State: Admin Set Price
+    # 6. State: Admin Set Price
     if state == 'awaiting_admin_set_price' and user.id in ADMIN_IDS:
         try:
             price = float(text)
@@ -597,14 +670,14 @@ async def cmd_set_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_country_selection(message_obj, country_input, context):
     full_name = get_full_country_name(country_input)
-    msg = await message_obj.reply_text(f"🔍 Fetching proxies for <b>{escape(str(full_name))}</b>...", parse_mode='HTML')
+    msg = await message_obj.reply_text(f"🔍 <i>Fetching proxies for <b>{escape(str(full_name))}</b>...</i>", parse_mode='HTML')
     
     loop = asyncio.get_running_loop()
     proxies, error = await loop.run_in_executor(None, _sync_get_available_proxies, full_name)
     
     if error:
         try:
-            await msg.edit_text(f"❌ Error: {escape(str(error))}", parse_mode='HTML')
+            await msg.edit_text(f"❌ <b>Error:</b> {escape(str(error))}", parse_mode='HTML')
         except BadRequest as e:
             if "Message is not modified" not in str(e): raise e
         return
@@ -614,9 +687,12 @@ async def process_country_selection(message_obj, country_input, context):
     
     if not proxies:
         try:
-            await msg.edit_text(f"⚠️ No proxies found for <b>{escape(str(full_name))}</b>.", 
-                                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎲 Try Random Proxy", callback_data="get_proxy_random")]]),
-                                parse_mode='HTML')
+            err_msg = (
+                f"⚠️ <b>NO PROXIES FOUND</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"There are currently no active proxies available for <b>{escape(str(full_name))}</b>."
+            )
+            await msg.edit_text(err_msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🎲 Try Random Proxy", callback_data="get_proxy_random")]]), parse_mode='HTML')
         except BadRequest as e:
             if "Message is not modified" not in str(e): raise e
         return
@@ -652,11 +728,12 @@ async def show_region_page(message_obj, page, context):
     keyboard.append([InlineKeyboardButton("🌍 Change Country", callback_data="change_country")])
     
     try:
-        await message_obj.edit_text(
-            f"🌍 <b>Select Proxy for {escape(str(full_name))}</b>\nChoose a region from the list below:",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode='HTML'
+        region_msg = (
+            f"🌍 <b>SELECT A REGION: {escape(str(full_name))}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Choose a specific region from the list below:"
         )
+        await message_obj.edit_text(region_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='HTML')
     except BadRequest as e:
         if "Message is not modified" not in str(e): raise e
 
@@ -676,32 +753,29 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     init_user_balance(user.id)
     
     if BOT_DATA['users'][user_str]['balance'] < price:
-        err = f"❌ <b>Insufficient Balance!</b>\n\n💰 Your balance: <b>{BOT_DATA['users'][user_str]['balance']} TK</b>\n🚀 Proxy Price: <b>{price} TK</b>\n\nPlease click <b>💳 Add Balance</b> to top up."
+        err = (
+            f"❌ <b>INSUFFICIENT BALANCE!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 Your Balance: <b>{BOT_DATA['users'][user_str]['balance']} TK</b>\n"
+            f"🚀 Proxy Price: <b>{price} TK</b>\n\n"
+            f"Please click <b>💳 Add Balance</b> to top up your account."
+        )
         if is_edit and hasattr(message_obj, 'edit_text'):
             try: await message_obj.edit_text(err, parse_mode='HTML')
             except: pass
         else: await context.bot.send_message(chat_id=user.id, text=err, parse_mode='HTML')
         return
 
-    # 3. Cooldown Check
-    now = time.time()
-    last_req = USER_COOLDOWNS.get(user.id, 0)
-    if now - last_req < 10: # Shortened cooldown to 10 seconds
-        remaining = int(10 - (now - last_req))
-        await context.bot.send_message(chat_id=user.id, text=f"⏳ Please wait <b>{remaining} seconds</b>...", parse_mode='HTML')
-        return
-    USER_COOLDOWNS[user.id] = now
-
     status_msg = message_obj
     if is_edit and hasattr(message_obj, 'edit_text'):
-        try: status_msg = await message_obj.edit_text("⏳ Unlocking proxy...", parse_mode='HTML')
+        try: status_msg = await message_obj.edit_text("⏳ <i>Unlocking premium proxy...</i>", parse_mode='HTML')
         except: pass
     else:
-        status_msg = await context.bot.send_message(chat_id=user.id, text="⏳ Unlocking proxy...", parse_mode='HTML')
+        status_msg = await context.bot.send_message(chat_id=user.id, text="⏳ <i>Unlocking premium proxy...</i>", parse_mode='HTML')
 
     loop = asyncio.get_running_loop()
     
-    # 4. Fetch Proxy Details
+    # 3. Fetch Proxy Details using Executor
     if proxy_id:
         pid = proxy_id
         p_list = context.user_data.get('regions_list', [])
@@ -711,7 +785,6 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     else:
         proxy_obj, error = await loop.run_in_executor(None, _sync_fetch_proxy_obj_random, country, region)
         if error:
-            USER_COOLDOWNS[user.id] = 0
             try: await status_msg.edit_text(f"❌ <b>Error:</b> {escape(str(error))}", parse_mode='HTML')
             except: pass
             return # Exit safely. NO BALANCE DEDUCTED
@@ -719,10 +792,9 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
         pid, speed, p_type, real_region = proxy_obj['Id'], proxy_obj.get('Speed', 'N/A'), proxy_obj.get('useType', 'N/A'), proxy_obj.get('Region', region)
         context.user_data['last_region'] = real_region
 
-    # 5. Reveal Proxy Credentials
+    # 4. Reveal Proxy Credentials
     creds, error = await loop.run_in_executor(None, _sync_reveal_credentials, pid)
     if error:
-        USER_COOLDOWNS[user.id] = 0 
         try: await status_msg.edit_text(f"❌ <b>Reveal Error:</b> {escape(str(error))}", parse_mode='HTML')
         except: pass
         return # Exit safely. NO BALANCE DEDUCTED
@@ -736,12 +808,20 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     except: ip, port, u, p = "N/A", "N/A", "N/A", "N/A"
 
     final_text = (
-        f"✅ <b>{escape(str(country))} Proxy Generated</b>\n"
-        f"📍 Region: {escape(str(real_region))}\n"
-        f"🚀 Speed: <b>{escape(str(speed))}</b> | 📶 Type: <b>{escape(str(p_type))}</b>\n\n"
+        f"✅ <b>PROXY SUCCESSFULLY GENERATED!</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🌍 <b>Location:</b> {escape(str(country))} (📍 {escape(str(real_region))})\n"
+        f"⚡ <b>Speed:</b> {escape(str(speed))} | 📶 <b>Type:</b> {escape(str(p_type))}\n\n"
+        f"📥 <b>Format (IP:Port:User:Pass):</b>\n"
         f"<code>{escape(str(creds))}</code>\n\n"
-        f"<b>Details:</b>\nHost: <code>{escape(str(ip))}</code>\nPort: <code>{escape(str(port))}</code>\nUser: <code>{escape(str(u))}</code>\nPass: <code>{escape(str(p))}</code>\n\n"
-        f"<i>💰 New Balance: {new_bal} TK (-{price} TK)</i>"
+        f"📝 <b>Detailed Info:</b>\n"
+        f"🌐 Host: <code>{escape(str(ip))}</code>\n"
+        f"🔌 Port: <code>{escape(str(port))}</code>\n"
+        f"👤 User: <code>{escape(str(u))}</code>\n"
+        f"🔑 Pass: <code>{escape(str(p))}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💳 <b>Balance Deducted:</b> -{price} TK\n"
+        f"💰 <b>Remaining Balance:</b> {new_bal} TK"
     )
     
     kb = InlineKeyboardMarkup([
@@ -757,6 +837,7 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     usage_count = increment_usage(user.id)
     log_message = (
         f"🚀 <b>Proxy Generated</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"👤 <b>User:</b> @{escape(str(user.username))} (<code>{user.id}</code>)\n"
         f"🏳️ <b>Country:</b> {escape(str(country))} | 📍 {escape(str(real_region))}\n"
         f"💰 <b>Spent:</b> {price} TK"
@@ -786,17 +867,34 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == 'pay_piprapay':
         context.user_data['state'] = 'awaiting_deposit'
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-        await query.message.edit_text("💰 <b>How much TK do you want to add?</b>\n\nEnter the amount below (Min 10):", parse_mode='HTML', reply_markup=kb)
+        msg = (
+            "⚡ <b>PIPRAPAY AUTO-DEPOSIT</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "💰 How much TK do you want to add?\n\n"
+            "<i>Please enter the amount below (Min 10):</i>"
+        )
+        await query.message.edit_text(msg, parse_mode='HTML', reply_markup=kb)
         return
         
     if action == 'pay_binance':
         context.user_data['state'] = 'awaiting_binance_amount'
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-        await query.message.edit_text("🟡 <b>Binance Payment</b>\n\nBinance UID: <code>805398719</code>\n\nHow much TK are you depositing?", parse_mode='HTML', reply_markup=kb)
+        msg = (
+            "🟡 <b>BINANCE MANUAL DEPOSIT</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Binance UID: <code>805398719</code>\n\n"
+            "💰 How much TK are you depositing?\n"
+            "<i>Enter the amount below:</i>"
+        )
+        await query.message.edit_text(msg, parse_mode='HTML', reply_markup=kb)
         return
 
     # Handle Manual Payment Admin Approval
-    if action.startswith('man_approve_') and user.id in ADMIN_IDS:
+    if action.startswith('man_approve_'):
+        if user.id not in ADMIN_IDS:
+            await query.answer("❌ Unauthorized!", show_alert=True)
+            return
+            
         order_id = action.replace('man_approve_', '')
         order = BOT_DATA.get('manual_payments', {}).get(order_id)
         
@@ -819,12 +917,22 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_caption = (query.message.caption_html or "") + "\n\n✅ <b>APPROVED</b> by Admin"
         try: await query.message.edit_caption(caption=new_caption, parse_mode='HTML')
         except: pass
-        try: await context.bot.send_message(chat_id=target_id, text=f"🎉 <b>Payment Approved!</b>\n\nYour manual deposit of <b>{amount} TK</b> has been verified and added to your balance.", parse_mode='HTML')
+        
+        target_msg = (
+            f"🎉 <b>PAYMENT APPROVED!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Your manual deposit of <b>{amount} TK</b> has been verified and successfully added to your balance."
+        )
+        try: await context.bot.send_message(chat_id=target_id, text=target_msg, parse_mode='HTML')
         except: pass
         return
 
     # Handle Manual Payment Admin Rejection
-    if action.startswith('man_reject_') and user.id in ADMIN_IDS:
+    if action.startswith('man_reject_'):
+        if user.id not in ADMIN_IDS:
+            await query.answer("❌ Unauthorized!", show_alert=True)
+            return
+            
         order_id = action.replace('man_reject_', '')
         order = BOT_DATA.get('manual_payments', {}).get(order_id)
         
@@ -842,26 +950,112 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_caption = (query.message.caption_html or "") + "\n\n❌ <b>REJECTED</b> by Admin"
         try: await query.message.edit_caption(caption=new_caption, parse_mode='HTML')
         except: pass
-        try: await context.bot.send_message(chat_id=order['user_id'], text=f"❌ <b>Payment Rejected!</b>\n\nYour manual deposit for Order ID <code>{order['trx_id']}</code> was rejected by the admin. Contact support if you think this is a mistake.", parse_mode='HTML')
+        
+        target_msg = (
+            f"❌ <b>PAYMENT REJECTED!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Your manual deposit for Order ID <code>{order['trx_id']}</code> was rejected by the admin.\n\n"
+            f"<i>Please contact support if you think this is a mistake.</i>"
+        )
+        try: await context.bot.send_message(chat_id=order['user_id'], text=target_msg, parse_mode='HTML')
         except: pass
+        return
+        
+    # Handle Auto Payment Admin Approval/Reject Flow
+    if action.startswith('pdec_a_') or action.startswith('pdec_r_'):
+        if user.id not in ADMIN_IDS:
+            await query.answer("❌ Unauthorized!", show_alert=True)
+            return
+            
+        is_approve = action.startswith('pdec_a_')
+        order_id = action.replace('pdec_a_', '').replace('pdec_r_', '')
+        order = BOT_DATA.get('pending_payments', {}).get(order_id)
+
+        if not order:
+            await query.answer("❌ Order not found.", show_alert=True)
+            return
+            
+        if order['status'] != 'pending':
+            await query.answer("⚠️ Payment has already been processed (e.g. by Webhook).", show_alert=True)
+            new_text = query.message.text_html + f"\n\n⚠️ <b>Already Processed ({order['status']})</b>"
+            try: await query.message.edit_text(text=new_text, parse_mode='HTML')
+            except: pass
+            return
+
+        target_id = order['user_id']
+        amount = order['amount']
+
+        if is_approve:
+            init_user_balance(target_id)
+            BOT_DATA['users'][str(target_id)]['balance'] += amount
+            order['status'] = 'completed'
+            save_data(BOT_DATA)
+            
+            await query.answer("✅ Approved!")
+            new_text = query.message.text_html + "\n\n✅ <b>APPROVED</b> manually by Admin"
+            try: await query.message.edit_text(text=new_text, parse_mode='HTML')
+            except: pass
+            
+            target_msg = (
+                f"🎉 <b>PAYMENT APPROVED!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Your auto-deposit of <b>{amount} TK</b> was manually verified and added to your balance."
+            )
+            try: await context.bot.send_message(chat_id=target_id, text=target_msg, parse_mode='HTML')
+            except: pass
+            
+            log_receipt = (
+                f"💰 <b>New Deposit Notification!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 User ID: <code>{target_id}</code>\n"
+                f"💵 Amount: <b>{amount} TK</b>\n"
+                f"💳 Method: Auto Payment (Manual Override)\n"
+                f"📅 Date: {datetime.datetime.now().strftime('%d-%m-%Y | %I:%M %p')}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ Status: Successfully Added"
+            )
+            try: await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_receipt, parse_mode='HTML')
+            except: pass
+
+        else:
+            order['status'] = 'rejected'
+            save_data(BOT_DATA)
+            await query.answer("❌ Rejected!")
+            new_text = query.message.text_html + "\n\n❌ <b>REJECTED</b> manually by Admin"
+            try: await query.message.edit_text(text=new_text, parse_mode='HTML')
+            except: pass
+            
+            target_msg = (
+                f"❌ <b>PAYMENT REJECTED!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Your auto-deposit order <code>{order_id}</code> was cancelled."
+            )
+            try: await context.bot.send_message(chat_id=target_id, text=target_msg, parse_mode='HTML')
+            except: pass
+
         return
 
     # Handle Admin Menu Callbacks
     if action == 'admin_credit' and user.id in ADMIN_IDS:
         context.user_data['state'] = 'awaiting_admin_credit_target'
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-        await query.message.edit_text("💳 <b>Credit User</b>\n\nEnter the Telegram <b>@username</b> or <b>User ID</b> of the target:", parse_mode='HTML', reply_markup=kb)
+        await query.message.edit_text("💳 <b>Credit User</b>\n━━━━━━━━━━━━━━━━━━━━\nEnter the Telegram <b>@username</b> or <b>User ID</b> of the target:", parse_mode='HTML', reply_markup=kb)
         return
         
     if action == 'admin_setprice' and user.id in ADMIN_IDS:
         context.user_data['state'] = 'awaiting_admin_set_price'
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-        await query.message.edit_text(f"💰 <b>Set Proxy Price</b>\n\nCurrent Price: {BOT_DATA.get('proxy_price', 10)} TK\n\nEnter the new price:", parse_mode='HTML', reply_markup=kb)
+        msg = (
+            f"💰 <b>SET PROXY PRICE</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"Current Price: <b>{BOT_DATA.get('proxy_price', 10)} TK</b>\n\n"
+            f"Enter the new price:"
+        )
+        await query.message.edit_text(msg, parse_mode='HTML', reply_markup=kb)
         return
 
-    # Handle Check Payment Verification
+    # Handle Check Payment Verification (User Side)
     if action.startswith('checkpay_'):
-        # FIX: Replace 'checkpay_' rather than splitting by '_' to get the full Order ID!
         order_id = action.replace('checkpay_', '')
         order = BOT_DATA['pending_payments'].get(order_id)
         
@@ -877,17 +1071,47 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_paid = await loop.run_in_executor(None, _sync_verify_piprapay, order_id, order['pp_id'])
         
         if is_paid:
-            # Add balance
             amount = order['amount']
-            init_user_balance(order['user_id'])
-            BOT_DATA['users'][str(order['user_id'])]['balance'] += amount
+            uid = order['user_id']
+            init_user_balance(uid)
+            BOT_DATA['users'][str(uid)]['balance'] += amount
             BOT_DATA['pending_payments'][order_id]['status'] = 'completed'
             save_data(BOT_DATA)
             
             await query.answer("🎉 Payment Verified! Balance added.", show_alert=True)
-            try:
-                await query.message.edit_text(f"✅ <b>Payment Successful!</b>\n\n<b>{amount} TK</b> has been successfully added to your balance.", parse_mode='HTML')
+            
+            target_msg = (
+                f"✅ <b>PAYMENT SUCCESSFUL!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"<b>{amount} TK</b> has been successfully added to your balance."
+            )
+            try: await query.message.edit_text(target_msg, parse_mode='HTML')
             except: pass
+            
+            log_receipt = (
+                f"💰 <b>New Deposit Notification!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 User ID: <code>{uid}</code>\n"
+                f"💵 Amount: <b>{amount} TK</b>\n"
+                f"💳 Method: Auto Payment (User Verified)\n"
+                f"📅 Date: {datetime.datetime.now().strftime('%d-%m-%Y | %I:%M %p')}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ Status: Successfully Added"
+            )
+            try: await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_receipt, parse_mode='HTML')
+            except: pass
+            
+            log_msg_id = order.get('log_msg_id')
+            if log_msg_id:
+                try: 
+                    await context.bot.edit_message_text(
+                        chat_id=LOG_GROUP_ID, 
+                        message_id=log_msg_id,
+                        text=f"✅ <b>Processed for User ID:</b> <code>{uid}</code>\n<b>Action:</b> Approved Automatically (Verified)",
+                        parse_mode='HTML'
+                    )
+                except: pass
+                
         else:
             await query.answer("⏳ Payment not found or pending. Please wait a minute and try again.", show_alert=True)
         return
@@ -904,7 +1128,12 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action == 'back_to_regions':
         await show_region_page(query.message, 1, context)
     elif action == 'change_country':
-        try: await query.message.edit_text("🌍 <b>Select Country</b>\nType the 2-letter Code.", parse_mode='HTML')
+        msg = (
+            "🌍 <b>SELECT A COUNTRY</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Type the <b>2-letter Country Code</b> or full name."
+        )
+        try: await query.message.edit_text(msg, parse_mode='HTML')
         except: pass
 
     await query.answer()
@@ -927,9 +1156,8 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('new', update_cookie))
     application.add_handler(CommandHandler('credit', cmd_credit))
     application.add_handler(CommandHandler('setprice', cmd_set_price))
-    # NOTE: Added filters.PHOTO so the bot can receive the Binance Screenshots!
     application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & (~filters.COMMAND), handle_message))
     application.add_handler(CallbackQueryHandler(button_click))
 
-    print("Bot is starting...")
+    print("High-Speed Proxy Bot with Premium UI is starting...")
     application.run_polling()
