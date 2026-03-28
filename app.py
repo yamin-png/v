@@ -9,7 +9,6 @@ import datetime
 import pycountry
 import math
 import time
-import urllib3
 from html import escape
 from urllib.parse import unquote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -22,9 +21,6 @@ from telegram.ext import (
     MessageHandler,
     filters
 )
-
-# Suppress insecure request warnings from urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8223325004:AAEIIhDOSAOPmALWmwEHuYeaJpjlzKNGJ1k"
@@ -119,7 +115,7 @@ def increment_usage(user_id):
     save_data(BOT_DATA)
     return user_stat['count']
 
-# --- PIPRAPAY API LOGIC ---
+# --- SECURE PIPRAPAY API LOGIC ---
 def _sync_create_piprapay(amount, user_id):
     order_id = f"PAY_{user_id}_{int(time.time())}"
     payload = {
@@ -135,7 +131,8 @@ def _sync_create_piprapay(amount, user_id):
         'Content-Type': 'application/json'
     }
     try:
-        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15, verify=False)
+        # Secure connection: strictly requires valid SSL (No verify=False, no HTTP fallback)
+        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15)
         if res.status_code == 200:
             data = res.json()
             payment_url = data.get('pp_url') or data.get('payment_url') or data.get('url')
@@ -143,18 +140,7 @@ def _sync_create_piprapay(amount, user_id):
             if payment_url and pp_id:
                 return payment_url, order_id, pp_id
     except Exception as e:
-        # Fallback to HTTP if HTTPS fails
-        if PHP_BRIDGE_URL.startswith("https://"):
-            try:
-                fallback_url = PHP_BRIDGE_URL.replace("https://", "http://")
-                res = requests.post(fallback_url, json=payload, headers=bridge_headers, timeout=15)
-                if res.status_code == 200:
-                    data = res.json()
-                    payment_url = data.get('pp_url') or data.get('payment_url') or data.get('url')
-                    pp_id = data.get('bp_id') or data.get('pp_id') or data.get('id') or data.get('invoice_id')
-                    if payment_url and pp_id:
-                        return payment_url, order_id, pp_id
-            except: pass
+        print(f"Secure Bridge Create Error: {e}")
     return None, None, None
 
 def _sync_verify_piprapay(order_id, pp_id):
@@ -166,14 +152,16 @@ def _sync_verify_piprapay(order_id, pp_id):
     }
     bridge_headers = {'Content-Type': 'application/json'}
     try:
-        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15, verify=False)
+        # Secure connection: strictly requires valid SSL
+        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15)
         if res.status_code == 200:
             data = res.json()
             status = str(data.get('status', '')).upper()
             data_status = str(data.get('data', {}).get('status', '')).upper() if isinstance(data.get('data'), dict) else ''
             valid_statuses = ['SUCCESS', '1', 'COMPLETED', 'PAID', 'TRUE']
             return status in valid_statuses or data_status in valid_statuses
-    except: pass
+    except Exception as e:
+        print(f"Secure Bridge Verify Error: {e}")
     return False
 
 # --- PROXY API LOGIC ---
