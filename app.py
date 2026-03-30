@@ -63,23 +63,46 @@ def load_settings():
     
     # MIGRATION LOGIC: If old bot_data.json exists, migrate it to MySQL and delete it.
     if os.path.exists("bot_data.json"):
-        print("🔄 Found old bot_data.json! Starting migration to MySQL...")
+        print("🔄 Found old bot_data.json! Starting migration to MySQL in batches...")
         try:
             with open("bot_data.json", 'r') as f:
                 old_data = json.load(f)
             
-            # 1. Send balances to PHP API
             users_data = old_data.get('users', {})
-            payload = {
-                'secret': PHP_BRIDGE_SECRET,
-                'action': 'migrate',
-                'users': users_data
-            }
-            res = requests.post(PHP_BRIDGE_URL, json=payload, timeout=30)
-            if res.status_code == 200 and res.json().get('success'):
-                print(f"✅ Migration Successful: {res.json().get('message')}")
+            user_items = list(users_data.items())
+            chunk_size = 50  # Send 50 users at a time to prevent server timeout/payload block
+            migration_success = True
+            total_migrated = 0
+            
+            for i in range(0, len(user_items), chunk_size):
+                chunk = dict(user_items[i:i+chunk_size])
+                payload = {
+                    'secret': PHP_BRIDGE_SECRET,
+                    'action': 'migrate',
+                    'users': chunk
+                }
+                # Use standard headers to prevent WAF blocks
+                mig_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Content-Type': 'application/json'}
+                try:
+                    res = requests.post(PHP_BRIDGE_URL, json=payload, headers=mig_headers, timeout=30)
+                    if res.status_code == 200 and res.json().get('success'):
+                        total_migrated += len(chunk)
+                        print(f"⏳ Migrated {total_migrated}/{len(user_items)} users...")
+                    else:
+                        print(f"❌ Migration chunk failed! Server response: {res.text}")
+                        migration_success = False
+                        break
+                except Exception as e:
+                    print(f"❌ Migration Error on chunk: {e}")
+                    migration_success = False
+                    break
                 
-                # 2. Save settings and username map locally
+                time.sleep(1) # Be gentle on the server
+                
+            if migration_success:
+                print(f"✅ Migration Successful! All {total_migrated} users moved to MySQL.")
+                
+                # Save settings and username map locally
                 default_settings['cookie'] = old_data.get('cookie', DEFAULT_COOKIE)
                 default_settings['proxy_price'] = old_data.get('proxy_price', 10)
                 default_settings['username_map'] = old_data.get('username_map', {})
@@ -88,13 +111,14 @@ def load_settings():
                 with open(SETTINGS_FILE, 'w') as f:
                     json.dump(default_settings, f, indent=4)
                     
-                # 3. Delete old file
+                # Delete old file
                 os.remove("bot_data.json")
                 print("🗑️ bot_data.json has been safely deleted.")
             else:
-                print("❌ Migration Failed! Server response:", res.text)
+                print("⚠️ Migration stopped due to errors. bot_data.json was kept safe.")
+                
         except Exception as e:
-            print(f"❌ Migration Error: {e}")
+            print(f"❌ Critical Migration Error: {e}")
 
     # Normal Settings Load
     if not os.path.exists(SETTINGS_FILE):
@@ -130,8 +154,10 @@ update_headers_with_xsrf()
 # --- MYSQL DATABASE API HELPERS ---
 def db_api_request(payload):
     payload['secret'] = PHP_BRIDGE_SECRET
+    # Adding User-Agent ensures Cloudflare/Firewalls don't block empty-agent requests
+    req_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Content-Type': 'application/json'}
     try:
-        res = requests.post(PHP_BRIDGE_URL, json=payload, timeout=15)
+        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=req_headers, timeout=15)
         return res.json()
     except Exception as e:
         print(f"DB API Error: {e}")
