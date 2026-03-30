@@ -131,7 +131,6 @@ def _sync_create_piprapay(amount, user_id):
         'Content-Type': 'application/json'
     }
     try:
-        # Secure connection: strictly requires valid SSL (No verify=False, no HTTP fallback)
         res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15)
         if res.status_code == 200:
             data = res.json()
@@ -148,21 +147,119 @@ def _sync_verify_piprapay(order_id, pp_id):
         'secret': PHP_BRIDGE_SECRET,
         'action': 'verify',
         'order_id': order_id,
-        'pp_id': pp_id
+        'pp_id': pp_id,
+        'invoice_id': pp_id  # Send multiple id fields just in case PHP bridge expects it
     }
     bridge_headers = {'Content-Type': 'application/json'}
-    try:
-        # Secure connection: strictly requires valid SSL
-        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15)
-        if res.status_code == 200:
-            data = res.json()
-            status = str(data.get('status', '')).upper()
-            data_status = str(data.get('data', {}).get('status', '')).upper() if isinstance(data.get('data'), dict) else ''
-            valid_statuses = ['SUCCESS', '1', 'COMPLETED', 'PAID', 'TRUE']
-            return status in valid_statuses or data_status in valid_statuses
-    except Exception as e:
-        print(f"Secure Bridge Verify Error: {e}")
+    
+    # Retry mechanism (2 attempts) in case of bridge timeouts or temporary network lags
+    for attempt in range(2):
+        try:
+            res = requests.post(PHP_BRIDGE_URL, json=payload, headers=bridge_headers, timeout=15)
+            if res.status_code == 200:
+                data = res.json()
+                
+                # Broaden the parsing logic to catch all success variations
+                status = str(data.get('status', '')).upper()
+                data_status = str(data.get('data', {}).get('status', '')).upper() if isinstance(data.get('data'), dict) else ''
+                msg_text = str(data.get('message', '')).upper()
+                
+                valid_statuses = ['SUCCESS', '1', 'COMPLETED', 'PAID', 'TRUE', 'APPROVED']
+                
+                if status in valid_statuses or data_status in valid_statuses:
+                    return True
+                if 'SUCCESS' in msg_text or 'PAID' in msg_text:
+                    return True
+                    
+        except Exception as e:
+            print(f"Secure Bridge Verify Error (Attempt {attempt+1}): {e}")
+            time.sleep(1.5) # Wait slightly before retrying
+            
     return False
+
+# --- AUTO PAYMENT MONITOR (BACKGROUND TASK) ---
+async def monitor_payment(context: ContextTypes.DEFAULT_TYPE, order_id: str, user_id: int, amount: float, pp_id: str, chat_id: int, message_id: int):
+    loop = asyncio.get_running_loop()
+    max_attempts = 60  # Check for 10 minutes (60 attempts * 10 seconds)
+    
+    for _ in range(max_attempts):
+        await asyncio.sleep(10)  # Wait 10 seconds between checks
+        
+        # Stop checking if order was manually approved/rejected by admin
+        order = BOT_DATA.get('pending_payments', {}).get(order_id)
+        if not order or order.get('status') != 'pending':
+            break
+            
+        is_paid = await loop.run_in_executor(None, _sync_verify_piprapay, order_id, pp_id)
+        
+        if is_paid:
+            # Double check to prevent race conditions
+            if BOT_DATA['pending_payments'][order_id]['status'] == 'completed':
+                break
+                
+            # Update Balance
+            init_user_balance(user_id)
+            BOT_DATA['users'][str(user_id)]['balance'] += amount
+            BOT_DATA['pending_payments'][order_id]['status'] = 'completed'
+            save_data(BOT_DATA)
+            
+            # Notify User of Success
+            success_msg = (
+                f"✅ <b>PAYMENT AUTO-VERIFIED!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"<b>{amount} TK</b> has been successfully added to your balance."
+            )
+            try:
+                # Update the original payment message so the link disappears
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"✅ <b>Payment of {amount} TK Completed & Verified!</b>",
+                    parse_mode='HTML'
+                )
+                # Send a direct notification
+                await context.bot.send_message(chat_id=user_id, text=success_msg, parse_mode='HTML')
+            except: pass
+            
+            # Notify Admin Log Group
+            log_receipt = (
+                f"💰 <b>New Auto-Deposit Notification!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 User ID: <code>{user_id}</code>\n"
+                f"💵 Amount: <b>{amount} TK</b>\n"
+                f"💳 Method: PipraPay (Auto-Detected)\n"
+                f"📅 Date: {datetime.datetime.now().strftime('%d-%m-%Y | %I:%M %p')}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ Status: Successfully Added"
+            )
+            try: await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_receipt, parse_mode='HTML')
+            except: pass
+            
+            # Update Admin Log Message
+            log_msg_id = order.get('log_msg_id')
+            if log_msg_id:
+                try: 
+                    await context.bot.edit_message_text(
+                        chat_id=LOG_GROUP_ID, 
+                        message_id=log_msg_id,
+                        text=f"✅ <b>Processed for User ID:</b> <code>{user_id}</code>\n<b>Action:</b> Approved Automatically by System",
+                        parse_mode='HTML'
+                    )
+                except: pass
+            break
+    else:
+        # If loop finishes without breaking (10 minutes passed without payment)
+        if BOT_DATA.get('pending_payments', {}).get(order_id, {}).get('status') == 'pending':
+            BOT_DATA['pending_payments'][order_id]['status'] = 'expired'
+            save_data(BOT_DATA)
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=f"⏳ <b>Payment link expired.</b> Please generate a new deposit link.",
+                    parse_mode='HTML'
+                )
+            except: pass
 
 # --- PROXY API LOGIC ---
 def _sync_get_available_proxies(country_full_name):
@@ -491,16 +588,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 user_kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton(f"💳 Pay {amount} TK", url=payment_url)],
-                    [InlineKeyboardButton("✅ Check Payment Status", callback_data=f"checkpay_{order_id}")]
+                    [InlineKeyboardButton("❌ Cancel Payment", callback_data="cancel_action")]
                 ])
                 
                 payment_text = (
                     f"🔗 <b>PAYMENT LINK GENERATED!</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"Click the button below to pay <b>{amount} TK</b>.\n\n"
-                    f"<i>After completing the payment, make sure to click <b>Check Payment Status</b>.</i>"
+                    f"⏳ <i>Waiting for payment... (This will automatically verify once you pay)</i>"
                 )
-                await msg.edit_text(payment_text, reply_markup=user_kb, parse_mode='HTML')
+                payment_msg = await msg.edit_text(payment_text, reply_markup=user_kb, parse_mode='HTML')
+                
+                # Start the background task to monitor the payment
+                context.application.create_task(
+                    monitor_payment(
+                        context, order_id, user.id, amount, pp_id, 
+                        payment_msg.chat_id, payment_msg.message_id
+                    )
+                )
             else:
                 await msg.edit_text("❌ <b>Payment Gateway Error.</b> Please try again later.", parse_mode='HTML')
                 
@@ -1042,67 +1147,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(msg, parse_mode='HTML', reply_markup=kb)
         return
 
-    # Handle Check Payment Verification (User Side)
-    if action.startswith('checkpay_'):
-        order_id = action.replace('checkpay_', '')
-        order = BOT_DATA['pending_payments'].get(order_id)
-        
-        if not order:
-            await query.answer("❌ Order not found.", show_alert=True)
-            return
-            
-        if order['status'] == 'completed':
-            await query.answer("✅ This payment was already completed!", show_alert=True)
-            return
-            
-        loop = asyncio.get_running_loop()
-        is_paid = await loop.run_in_executor(None, _sync_verify_piprapay, order_id, order['pp_id'])
-        
-        if is_paid:
-            amount = order['amount']
-            uid = order['user_id']
-            init_user_balance(uid)
-            BOT_DATA['users'][str(uid)]['balance'] += amount
-            BOT_DATA['pending_payments'][order_id]['status'] = 'completed'
-            save_data(BOT_DATA)
-            
-            await query.answer("🎉 Payment Verified! Balance added.", show_alert=True)
-            
-            target_msg = (
-                f"✅ <b>PAYMENT SUCCESSFUL!</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"<b>{amount} TK</b> has been successfully added to your balance."
-            )
-            try: await query.message.edit_text(target_msg, parse_mode='HTML')
-            except: pass
-            
-            log_receipt = (
-                f"💰 <b>New Deposit Notification!</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"👤 User ID: <code>{uid}</code>\n"
-                f"💵 Amount: <b>{amount} TK</b>\n"
-                f"💳 Method: Auto Payment (User Verified)\n"
-                f"📅 Date: {datetime.datetime.now().strftime('%d-%m-%Y | %I:%M %p')}\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"✅ Status: Successfully Added"
-            )
-            try: await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_receipt, parse_mode='HTML')
-            except: pass
-            
-            log_msg_id = order.get('log_msg_id')
-            if log_msg_id:
-                try: 
-                    await context.bot.edit_message_text(
-                        chat_id=LOG_GROUP_ID, 
-                        message_id=log_msg_id,
-                        text=f"✅ <b>Processed for User ID:</b> <code>{uid}</code>\n<b>Action:</b> Approved Automatically (Verified)",
-                        parse_mode='HTML'
-                    )
-                except: pass
-                
-        else:
-            await query.answer("⏳ Payment not found or pending. Please wait a minute and try again.", show_alert=True)
-        return
+    # Removed old 'checkpay_' handling as it is now fully automatic
 
     country = context.user_data.get('country_full')
     if action.startswith('reg_page_'):
