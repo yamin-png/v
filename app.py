@@ -46,7 +46,7 @@ COUNTRY_OVERRIDES = {
 DEFAULT_COOKIE = '_ga=GA1.2...; '
 
 HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': '*/*',
     'X-Requested-With': 'XMLHttpRequest',
     'Referer': 'https://dichvusocks.net/sockslist',
@@ -74,6 +74,14 @@ def load_settings():
             migration_success = True
             total_migrated = 0
             
+            # Strong anti-bot bypass headers
+            mig_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'Connection': 'keep-alive'
+            }
+            
             for i in range(0, len(user_items), chunk_size):
                 chunk = dict(user_items[i:i+chunk_size])
                 payload = {
@@ -81,23 +89,30 @@ def load_settings():
                     'action': 'migrate',
                     'users': chunk
                 }
-                # Use standard headers to prevent WAF blocks
-                mig_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Content-Type': 'application/json'}
-                try:
-                    res = requests.post(PHP_BRIDGE_URL, json=payload, headers=mig_headers, timeout=30)
-                    if res.status_code == 200 and res.json().get('success'):
-                        total_migrated += len(chunk)
-                        print(f"⏳ Migrated {total_migrated}/{len(user_items)} users...")
-                    else:
-                        print(f"❌ Migration chunk failed! Server response: {res.text}")
-                        migration_success = False
-                        break
-                except Exception as e:
-                    print(f"❌ Migration Error on chunk: {e}")
+                
+                success_for_chunk = False
+                for attempt in range(3): # Retry up to 3 times per chunk
+                    try:
+                        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=mig_headers, timeout=30)
+                        if res.status_code == 200 and res.json().get('success'):
+                            success_for_chunk = True
+                            break
+                        else:
+                            print(f"⚠️ Chunk failed (Attempt {attempt+1})! Server response: {res.text}")
+                    except Exception as e:
+                        print(f"⚠️ Chunk Error (Attempt {attempt+1}): {e}")
+                    
+                    time.sleep(3) # Wait before retrying to cool down firewall
+                
+                if success_for_chunk:
+                    total_migrated += len(chunk)
+                    print(f"⏳ Migrated {total_migrated}/{len(user_items)} users...")
+                else:
+                    print("❌ Migration chunk failed completely after 3 attempts!")
                     migration_success = False
                     break
                 
-                time.sleep(1) # Be gentle on the server
+                time.sleep(1) # Be gentle on the server between successful chunks
                 
             if migration_success:
                 print(f"✅ Migration Successful! All {total_migrated} users moved to MySQL.")
@@ -155,13 +170,23 @@ update_headers_with_xsrf()
 def db_api_request(payload):
     payload['secret'] = PHP_BRIDGE_SECRET
     # Adding User-Agent ensures Cloudflare/Firewalls don't block empty-agent requests
-    req_headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Content-Type': 'application/json'}
-    try:
-        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=req_headers, timeout=15)
-        return res.json()
-    except Exception as e:
-        print(f"DB API Error: {e}")
-        return {"error": str(e)}
+    req_headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Connection': 'keep-alive'
+    }
+    
+    # Simple retry mechanism for regular API requests
+    for attempt in range(3):
+        try:
+            res = requests.post(PHP_BRIDGE_URL, json=payload, headers=req_headers, timeout=15)
+            return res.json()
+        except Exception as e:
+            if attempt == 2:
+                print(f"DB API Error after 3 attempts: {e}")
+                return {"error": str(e)}
+            time.sleep(2) # Cool down before retry
 
 def db_get_balance(user_id, username=""):
     res = db_api_request({
