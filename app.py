@@ -52,7 +52,7 @@ HEADERS = {
     'Referer': 'https://dichvusocks.net/sockslist',
 }
 
-# --- LOCAL SETTINGS MANAGEMENT & MIGRATION ---
+# --- LOCAL SETTINGS MANAGEMENT ---
 def load_settings():
     default_settings = {
         'cookie': DEFAULT_COOKIE,
@@ -60,80 +60,6 @@ def load_settings():
         'username_map': {},
         'manual_payments': {}
     }
-    
-    # MIGRATION LOGIC: If old bot_data.json exists, migrate it to MySQL and delete it.
-    if os.path.exists("bot_data.json"):
-        print("🔄 Found old bot_data.json! Starting migration to MySQL in batches...")
-        try:
-            with open("bot_data.json", 'r') as f:
-                old_data = json.load(f)
-            
-            users_data = old_data.get('users', {})
-            user_items = list(users_data.items())
-            chunk_size = 50  # Send 50 users at a time to prevent server timeout/payload block
-            migration_success = True
-            total_migrated = 0
-            
-            # Strong anti-bot bypass headers
-            mig_headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'Connection': 'keep-alive'
-            }
-            
-            for i in range(0, len(user_items), chunk_size):
-                chunk = dict(user_items[i:i+chunk_size])
-                payload = {
-                    'secret': PHP_BRIDGE_SECRET,
-                    'action': 'migrate',
-                    'users': chunk
-                }
-                
-                success_for_chunk = False
-                for attempt in range(3): # Retry up to 3 times per chunk
-                    try:
-                        res = requests.post(PHP_BRIDGE_URL, json=payload, headers=mig_headers, timeout=30)
-                        if res.status_code == 200 and res.json().get('success'):
-                            success_for_chunk = True
-                            break
-                        else:
-                            print(f"⚠️ Chunk failed (Attempt {attempt+1})! Server response: {res.text}")
-                    except Exception as e:
-                        print(f"⚠️ Chunk Error (Attempt {attempt+1}): {e}")
-                    
-                    time.sleep(3) # Wait before retrying to cool down firewall
-                
-                if success_for_chunk:
-                    total_migrated += len(chunk)
-                    print(f"⏳ Migrated {total_migrated}/{len(user_items)} users...")
-                else:
-                    print("❌ Migration chunk failed completely after 3 attempts!")
-                    migration_success = False
-                    break
-                
-                time.sleep(1) # Be gentle on the server between successful chunks
-                
-            if migration_success:
-                print(f"✅ Migration Successful! All {total_migrated} users moved to MySQL.")
-                
-                # Save settings and username map locally
-                default_settings['cookie'] = old_data.get('cookie', DEFAULT_COOKIE)
-                default_settings['proxy_price'] = old_data.get('proxy_price', 10)
-                default_settings['username_map'] = old_data.get('username_map', {})
-                default_settings['manual_payments'] = old_data.get('manual_payments', {})
-                
-                with open(SETTINGS_FILE, 'w') as f:
-                    json.dump(default_settings, f, indent=4)
-                    
-                # Delete old file
-                os.remove("bot_data.json")
-                print("🗑️ bot_data.json has been safely deleted.")
-            else:
-                print("⚠️ Migration stopped due to errors. bot_data.json was kept safe.")
-                
-        except Exception as e:
-            print(f"❌ Critical Migration Error: {e}")
 
     # Normal Settings Load
     if not os.path.exists(SETTINGS_FILE):
