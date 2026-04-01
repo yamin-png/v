@@ -388,13 +388,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             loop = asyncio.get_running_loop()
             bal = await loop.run_in_executor(None, db_get_balance, user.id, user.username)
             price = SETTINGS.get('proxy_price', 10)
+            hm_price = SETTINGS.get('hotmail_price', 5)
             
             msg = (
                 f"👤 <b>USER PROFILE</b>\n━━━━━━━━━━━━━━━━━━━━\n"
                 f"🆔 <b>Account ID:</b> <code>{user.id}</code>\n"
                 f"🪪 <b>Username:</b> @{user.username}\n"
                 f"💰 <b>Current Balance:</b> <b>{bal} TK</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n🚀 <b>Proxy Price:</b> {price} TK / IP\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🚀 <b>Proxy Price:</b> {price} TK / IP\n"
+                f"📧 <b>Hotmail Price:</b> {hm_price} TK / Acc\n"
             )
             await update.message.reply_text(msg, parse_mode='HTML')
             return
@@ -432,7 +435,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             loop = asyncio.get_running_loop()
             bal = await loop.run_in_executor(None, db_get_balance, user.id)
             if bal < total_cost:
-                return await update.message.reply_text(f"❌ <b>Insufficient balance!</b>\nYou need {total_cost} TK to buy {qty} accounts.\nYour balance: {bal} TK", parse_mode='HTML')
+                kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Add Balance", callback_data="trigger_add_balance")]])
+                return await update.message.reply_text(f"❌ <b>Insufficient balance!</b>\nYou need {total_cost} TK to buy {qty} accounts.\nYour balance: {bal} TK", parse_mode='HTML', reply_markup=kb)
             
             context.user_data['hotmail_qty'] = qty
             kb = InlineKeyboardMarkup([
@@ -730,11 +734,12 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     # 1. DB Balance Check
     bal = await loop.run_in_executor(None, db_get_balance, user.id)
     if bal < price:
-        err = f"❌ <b>INSUFFICIENT BALANCE!</b>\n━━━━━━━━━━━━━━━━━━━━\n💰 Your Balance: <b>{bal} TK</b>\n🚀 Proxy Price: <b>{price} TK</b>\n\nPlease click <b>💳 Add Balance</b>."
+        err = f"❌ <b>INSUFFICIENT BALANCE!</b>\n━━━━━━━━━━━━━━━━━━━━\n💰 Your Balance: <b>{bal} TK</b>\n🚀 Proxy Price: <b>{price} TK</b>\n\nPlease click <b>💳 Add Balance</b> below."
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Add Balance", callback_data="trigger_add_balance")]])
         if is_edit and hasattr(message_obj, 'edit_text'):
-            try: await message_obj.edit_text(err, parse_mode='HTML')
+            try: await message_obj.edit_text(err, parse_mode='HTML', reply_markup=kb)
             except: pass
-        else: await context.bot.send_message(chat_id=user.id, text=err, parse_mode='HTML')
+        else: await context.bot.send_message(chat_id=user.id, text=err, parse_mode='HTML', reply_markup=kb)
         return
 
     status_msg = message_obj
@@ -815,6 +820,18 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Cancelled")
         try: await query.message.edit_text("❌ <b>Action cancelled.</b>", parse_mode='HTML')
         except: pass
+        return
+
+    if action == 'trigger_add_balance':
+        context.user_data['state'] = None
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("⚡ PipraPay (Auto Deposit)", callback_data="pay_piprapay")],
+            [InlineKeyboardButton("🟡 Binance (Manual)", callback_data="pay_binance")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]
+        ])
+        msg = "💳 <b>ADD BALANCE</b>\n━━━━━━━━━━━━━━━━━━━━\nChoose your preferred payment method below.\nAuto-payments are credited <b>instantly</b>! ⚡"
+        try: await query.message.edit_text(msg, parse_mode='HTML', reply_markup=kb)
+        except: await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='HTML', reply_markup=kb)
         return
 
     if action == 'pay_piprapay':
@@ -917,6 +934,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         loop = asyncio.get_running_loop()
         bal = await loop.run_in_executor(None, db_get_balance, user.id)
         if bal < total_cost:
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Add Balance", callback_data="trigger_add_balance")]])
+            try: await query.message.reply_text(f"❌ <b>Insufficient balance!</b>\nYou need {total_cost} TK.\nYour balance: {bal} TK", parse_mode='HTML', reply_markup=kb)
+            except: pass
             return await query.answer("Insufficient balance!", show_alert=True)
             
         # Deduct balance via MySQL
