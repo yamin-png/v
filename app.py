@@ -9,6 +9,8 @@ import datetime
 import pycountry
 import math
 import time
+import io
+import csv
 from html import escape
 from urllib.parse import unquote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -35,6 +37,7 @@ PHP_BRIDGE_SECRET = 'rubel_proxy_secret_2026'
 # --- LOCAL SETTINGS FILE ---
 # Replaces bot_data.json. Only stores non-financial bot configs.
 SETTINGS_FILE = "local_settings.json"
+HOTMAIL_STOCK_FILE = "hotmail_stock.json"
 
 # --- DISHVUSOCKS CONFIG ---
 COUNTRY_OVERRIDES = {
@@ -57,6 +60,7 @@ def load_settings():
     default_settings = {
         'cookie': DEFAULT_COOKIE,
         'proxy_price': 10,
+        'hotmail_price': 5,
         'username_map': {},
         'manual_payments': {}
     }
@@ -79,6 +83,16 @@ def save_settings():
 
 SETTINGS = load_settings()
 HEADERS['Cookie'] = SETTINGS['cookie']
+
+def load_hotmail_stock():
+    if os.path.exists(HOTMAIL_STOCK_FILE):
+        try:
+            with open(HOTMAIL_STOCK_FILE, 'r') as f: return json.load(f)
+        except: pass
+    return []
+
+def save_hotmail_stock(stock):
+    with open(HOTMAIL_STOCK_FILE, 'w') as f: json.dump(stock, f, indent=4)
 
 # Keep track of temporary payment logs in memory
 PENDING_AUTO_PAYMENTS = {}
@@ -310,7 +324,7 @@ def resolve_user(target_str):
     return None
 
 def get_main_keyboard(user_id):
-    kb = [['Get Proxy ✨', '💳 Add Balance'], ['👤 Profile', '💸 Transfer']]
+    kb = [['Get Proxy ✨', '📧 Buy Hotmail'], ['💳 Add Balance', '👤 Profile'], ['💸 Transfer']]
     if user_id in ADMIN_IDS: kb.append(['⚙️ Admin Menu'])
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
@@ -342,7 +356,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user.username: return
     text = update.message.text.strip() if update.message.text else ""
     
-    main_commands = ['Get Proxy ✨', '💳 Add Balance', '👤 Profile', '💸 Transfer', '⚙️ Admin Menu']
+    main_commands = ['Get Proxy ✨', '📧 Buy Hotmail', '💳 Add Balance', '👤 Profile', '💸 Transfer', '⚙️ Admin Menu']
     if text in main_commands:
         context.user_data['state'] = None 
         
@@ -351,6 +365,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg, parse_mode='HTML')
             return
             
+        elif text == '📧 Buy Hotmail':
+            stock = load_hotmail_stock()
+            price = SETTINGS.get('hotmail_price', 5)
+            if not stock:
+                await update.message.reply_text("❌ <b>Out of stock!</b> Please check back later.", parse_mode='HTML')
+                return
+            context.user_data['state'] = 'awaiting_hotmail_qty'
+            await update.message.reply_text(f"📧 <b>BUY HOTMAIL</b>\n━━━━━━━━━━━━━━━━━━━━\n💰 Price: <b>{price} TK</b> / account\n📦 In Stock: <b>{len(stock)} accounts</b>\n\n🔢 How many accounts would you like to buy?", parse_mode='HTML')
+            return
+
         elif text == '💳 Add Balance':
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⚡ PipraPay (Auto Deposit)", callback_data="pay_piprapay")],
@@ -384,7 +408,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == '⚙️ Admin Menu' and user.id in ADMIN_IDS:
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💳 Credit User", callback_data="admin_credit")],
-                [InlineKeyboardButton("💰 Set Proxy Price", callback_data="admin_setprice")]
+                [InlineKeyboardButton("💰 Set Proxy Price", callback_data="admin_setprice"),
+                 InlineKeyboardButton("💰 Set Hotmail Price", callback_data="admin_sethmprice")],
+                [InlineKeyboardButton("📥 Add Hotmail Stock (TXT)", callback_data="admin_addhm")]
             ])
             await update.message.reply_text("⚙️ <b>Admin Control Panel</b>\n━━━━━━━━━━━━━━━━━━━━\nSelect an option below:", reply_markup=kb, parse_mode='HTML')
             return
@@ -393,6 +419,64 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- STATE HANDLING ---
     state = context.user_data.get('state')
     
+    if state == 'awaiting_hotmail_qty':
+        try:
+            qty = int(text)
+            if qty <= 0: return await update.message.reply_text("❌ Quantity must be greater than 0.")
+            stock = load_hotmail_stock()
+            if qty > len(stock): return await update.message.reply_text(f"❌ Not enough stock. Only {len(stock)} available.")
+            
+            price = SETTINGS.get('hotmail_price', 5)
+            total_cost = qty * price
+            
+            loop = asyncio.get_running_loop()
+            bal = await loop.run_in_executor(None, db_get_balance, user.id)
+            if bal < total_cost:
+                return await update.message.reply_text(f"❌ <b>Insufficient balance!</b>\nYou need {total_cost} TK to buy {qty} accounts.\nYour balance: {bal} TK", parse_mode='HTML')
+            
+            context.user_data['hotmail_qty'] = qty
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📝 Text Message", callback_data="hm_fmt_text")],
+                [InlineKeyboardButton("📄 TXT File", callback_data="hm_fmt_txt")],
+                [InlineKeyboardButton("📊 Excel File (CSV)", callback_data="hm_fmt_excel")],
+                [InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]
+            ])
+            await update.message.reply_text(f"📦 <b>Order Summary</b>\n━━━━━━━━━━━━━━━━━━━━\n🔹 Quantity: {qty}\n🔹 Total Cost: {total_cost} TK\n\nSelect your preferred delivery format:", reply_markup=kb, parse_mode='HTML')
+            context.user_data['state'] = None
+            return
+        except ValueError:
+            return await update.message.reply_text("❌ Please enter a valid number.")
+
+    if state == 'awaiting_hotmail_file' and user.id in ADMIN_IDS:
+        if update.message.document:
+            file_id = update.message.document.file_id
+            tg_file = await context.bot.get_file(file_id)
+            content = await tg_file.download_as_bytearray()
+            try:
+                text_content = content.decode('utf-8')
+                lines = [line.strip() for line in text_content.splitlines() if line.strip()]
+                stock = load_hotmail_stock()
+                stock.extend(lines)
+                save_hotmail_stock(stock)
+                await update.message.reply_text(f"✅ Successfully added <b>{len(lines)}</b> Hotmail accounts!\n📦 Total Stock: <b>{len(stock)}</b>", parse_mode='HTML')
+                context.user_data['state'] = None
+            except Exception as e:
+                await update.message.reply_text(f"❌ Error processing file: {e}")
+            return
+        else:
+            return await update.message.reply_text("❌ Please send a valid TXT file containing the accounts.")
+
+    if state == 'awaiting_admin_set_hmprice' and user.id in ADMIN_IDS:
+        try:
+            price = float(text)
+            if price < 0: return await update.message.reply_text("❌ Price cannot be negative.")
+            SETTINGS['hotmail_price'] = price
+            save_settings()
+            await update.message.reply_text(f"✅ <b>Success:</b> Hotmail price updated to {price} TK.", parse_mode='HTML')
+            context.user_data['state'] = None
+            return
+        except ValueError: return await update.message.reply_text("❌ Please enter a valid number.")
+
     if state == 'awaiting_binance_ss':
         if not update.message.photo:
             await update.message.reply_text("❌ <b>Error:</b> Please send a screenshot (photo) of your Binance transaction.", parse_mode='HTML')
@@ -799,6 +883,87 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
         return
 
+    if action == 'admin_setprice' and user.id in ADMIN_IDS:
+        context.user_data['state'] = 'awaiting_admin_set_price'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        await query.message.edit_text(f"💰 <b>SET PROXY PRICE</b>\n━━━━━━━━━━━━━━━━━━━━\nCurrent Price: <b>{SETTINGS.get('proxy_price', 10)} TK</b>\n\nEnter the new price:", parse_mode='HTML', reply_markup=kb)
+        return
+
+    if action == 'admin_sethmprice' and user.id in ADMIN_IDS:
+        context.user_data['state'] = 'awaiting_admin_set_hmprice'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        await query.message.edit_text(f"💰 <b>SET HOTMAIL PRICE</b>\n━━━━━━━━━━━━━━━━━━━━\nCurrent Price: <b>{SETTINGS.get('hotmail_price', 5)} TK</b>\n\nEnter the new price:", parse_mode='HTML', reply_markup=kb)
+        return
+
+    if action == 'admin_addhm' and user.id in ADMIN_IDS:
+        context.user_data['state'] = 'awaiting_hotmail_file'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        await query.message.edit_text(f"📥 <b>ADD HOTMAIL STOCK</b>\n━━━━━━━━━━━━━━━━━━━━\nPlease upload a <b>.txt</b> file containing the accounts.\n\n<i>Format: email\\tpassword or email:password</i>", parse_mode='HTML', reply_markup=kb)
+        return
+
+    if action.startswith('hm_fmt_'):
+        fmt = action.replace('hm_fmt_', '')
+        qty = context.user_data.get('hotmail_qty')
+        if not qty:
+            return await query.answer("Session expired. Please request again.", show_alert=True)
+        
+        stock = load_hotmail_stock()
+        if qty > len(stock):
+            return await query.answer("Not enough stock remaining!", show_alert=True)
+            
+        price = SETTINGS.get('hotmail_price', 5)
+        total_cost = qty * price
+        
+        loop = asyncio.get_running_loop()
+        bal = await loop.run_in_executor(None, db_get_balance, user.id)
+        if bal < total_cost:
+            return await query.answer("Insufficient balance!", show_alert=True)
+            
+        # Deduct balance via MySQL
+        success = await loop.run_in_executor(None, db_update_balance, user.id, -total_cost, f"Bought {qty} Hotmail accounts")
+        if not success:
+            return await query.answer("Database error. Try again.", show_alert=True)
+            
+        # Pop stock and save
+        bought_accs = stock[:qty]
+        stock = stock[qty:]
+        save_hotmail_stock(stock)
+        
+        try: await query.message.delete()
+        except: pass
+        
+        success_msg = f"✅ <b>HOTMAIL PURCHASE SUCCESSFUL!</b>\n━━━━━━━━━━━━━━━━━━━━\n📦 Quantity: {qty}\n💰 Deducted: {total_cost} TK\n\nEnjoy your accounts!"
+        
+        if fmt == 'text':
+            accs_str = "\n".join(bought_accs)
+            if len(accs_str) > 3800:
+                fmt = 'txt' # Fallback if text is too long for Telegram
+            else:
+                await context.bot.send_message(chat_id=user.id, text=f"{success_msg}\n\n<code>{accs_str}</code>", parse_mode='HTML')
+                
+        if fmt == 'txt':
+            file_content = "\n".join(bought_accs).encode('utf-8')
+            await context.bot.send_document(chat_id=user.id, document=file_content, filename=f"Hotmail_{qty}_Accounts.txt", caption=success_msg, parse_mode='HTML')
+            
+        if fmt == 'excel':
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(['Email', 'Password'])
+            for acc in bought_accs:
+                parts = re.split(r'\t|:', acc, maxsplit=1)
+                if len(parts) == 2: writer.writerow(parts)
+                else: writer.writerow([acc, ''])
+            file_content = output.getvalue().encode('utf-8')
+            await context.bot.send_document(chat_id=user.id, document=file_content, filename=f"Hotmail_{qty}_Accounts.csv", caption=success_msg, parse_mode='HTML')
+            
+        # Log purchase globally
+        log_receipt = f"📧 <b>Hotmail Purchased</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 User: @{escape(str(user.username))} (<code>{user.id}</code>)\n📦 Qty: {qty}\n💰 Spent: {total_cost} TK"
+        try: await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_receipt, parse_mode='HTML')
+        except: pass
+        
+        context.user_data['hotmail_qty'] = None
+        return
+
     country = context.user_data.get('country_full')
     if action.startswith('reg_page_'): await show_region_page(query.message, int(action.split('_')[2]), context)
     elif action.startswith('sel_id_'): await process_proxy_fetch(query.message, country, '', context, user, proxy_id=action.split('sel_id_')[1], is_edit=True)
@@ -829,7 +994,10 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('new', update_cookie))
     application.add_handler(CommandHandler('credit', cmd_credit))
     application.add_handler(CommandHandler('setprice', cmd_set_price))
-    application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & (~filters.COMMAND), handle_message))
+    
+    # Updated message handler to accept document uploads (for txt file restocks)
+    application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO | filters.Document.ALL) & (~filters.COMMAND), handle_message))
+    
     application.add_handler(CallbackQueryHandler(button_click))
 
     print("🚀 MySQL Connected High-Speed Proxy Bot is starting...")
