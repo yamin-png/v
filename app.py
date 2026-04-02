@@ -62,7 +62,9 @@ def load_settings():
         'proxy_price': 10,
         'hotmail_price': 5,
         'username_map': {},
-        'manual_payments': {}
+        'manual_payments': {},
+        'refill_bans': {},
+        'used_refill_images': []
     }
 
     # Normal Settings Load
@@ -422,6 +424,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # --- STATE HANDLING ---
     state = context.user_data.get('state')
     
+    if state == 'awaiting_refill_image':
+        if not update.message.photo:
+            return await update.message.reply_text("❌ Please send a valid screenshot (image) of the dead proxy.")
+        
+        photo_id = update.message.photo[-1].file_id
+        unique_id = update.message.photo[-1].file_unique_id
+        
+        used_images = SETTINGS.setdefault('used_refill_images', [])
+        bans = SETTINGS.setdefault('refill_bans', {})
+        
+        if unique_id in used_images:
+            # Duplicate detected! Ban for 2 days
+            bans[str(user.id)] = time.time() + (2 * 24 * 3600)
+            save_settings()
+            context.user_data['state'] = None
+            return await update.message.reply_text("🚫 <b>DUPLICATE IMAGE DETECTED!</b>\n━━━━━━━━━━━━━━━━━━━━\nYou submitted an image that has already been used for a refill.\nAs per our policy, you are now <b>banned from using the refill system for 2 days</b>.", parse_mode='HTML')
+        
+        # Not a duplicate. Issue refund.
+        used_images.append(unique_id)
+        if len(used_images) > 10000:
+            SETTINGS['used_refill_images'] = used_images[-5000:]
+            
+        price = SETTINGS.get('proxy_price', 10)
+        
+        # Auto refund via DB
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, db_update_balance, user.id, price, "Proxy Refill Auto-Refund")
+        save_settings()
+        
+        await update.message.reply_text(f"✅ <b>REFILL SUCCESSFUL!</b>\n━━━━━━━━━━━━━━━━━━━━\nYour screenshot has been accepted and <b>{price} TK</b> has been refunded to your account.\n\n<i>Note: An admin will review this. If it is found to be fake, your refund will be reversed and you will be banned.</i>", parse_mode='HTML')
+        context.user_data['state'] = None
+        
+        # Send to admin log group
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Verify OK", callback_data="refill_ok")],
+            [InlineKeyboardButton("❌ Reject & Ban (2 Days)", callback_data=f"refill_reject_{user.id}_{price}")]
+        ])
+        caption = f"♻️ <b>Auto-Refill Issued</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 User: @{user.username} (<code>{user.id}</code>)\n💰 Refunded: <b>{price} TK</b>\n━━━━━━━━━━━━━━━━━━━━\nPlease verify the screenshot."
+        try: await context.bot.send_photo(chat_id=LOG_GROUP_ID, photo=photo_id, caption=caption, parse_mode='HTML', reply_markup=kb)
+        except: pass
+        return
+
     if state == 'awaiting_hotmail_qty':
         try:
             qty = int(text)
@@ -797,8 +841,8 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Get Another (Same Region)", callback_data="get_same_proxy")],
-        [InlineKeyboardButton("🔙 Back to Regions", callback_data="back_to_regions")],
-        [InlineKeyboardButton("🌍 Change Country", callback_data="change_country")]
+        [InlineKeyboardButton("♻️ Refill (Refund Dead Proxy)", callback_data="trigger_refill")],
+        [InlineKeyboardButton("🔙 Back to Regions", callback_data="back_to_regions"), InlineKeyboardButton("🌍 Change Country", callback_data="change_country")]
     ])
     
     try: await status_msg.edit_text(final_text, parse_mode='HTML', reply_markup=kb)
@@ -821,6 +865,46 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: await query.message.edit_text("❌ <b>Action cancelled.</b>", parse_mode='HTML')
         except: pass
         return
+
+    if action == 'trigger_refill':
+        ban_expiry = SETTINGS.get('refill_bans', {}).get(str(user.id), 0)
+        if time.time() < ban_expiry:
+            remaining_hours = int((ban_expiry - time.time()) / 3600)
+            return await query.answer(f"🚫 You are banned from refilling for {remaining_hours} hours due to previous fake or duplicate submissions.", show_alert=True)
+        
+        context.user_data['state'] = 'awaiting_refill_image'
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
+        msg = "♻️ <b>PROXY REFILL</b>\n━━━━━━━━━━━━━━━━━━━━\nPlease upload a <b>screenshot</b> showing that the proxy failed/is dead.\n\n<i>⚠️ WARNING: Submitting fake or duplicate screenshots will result in an automatic 2-day ban from the refill system!</i>"
+        try: await query.message.reply_text(msg, parse_mode='HTML', reply_markup=kb)
+        except: await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='HTML', reply_markup=kb)
+        return await query.answer()
+
+    if action == 'refill_ok':
+        if user.id not in ADMIN_IDS: return await query.answer("❌ Unauthorized!", show_alert=True)
+        try: await query.message.edit_caption(caption=query.message.caption_html + "\n\n✅ <b>VERIFIED OK</b> by Admin", parse_mode='HTML')
+        except: pass
+        return await query.answer("Verified.")
+
+    if action.startswith('refill_reject_'):
+        if user.id not in ADMIN_IDS: return await query.answer("❌ Unauthorized!", show_alert=True)
+        parts = action.split('_')
+        target_id = parts[2]
+        amount = float(parts[3])
+        
+        # Reverse refund via MySQL
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, db_update_balance, target_id, -amount, "Admin Rejected Refill")
+        
+        # Ban user for 2 Days
+        SETTINGS.setdefault('refill_bans', {})[str(target_id)] = time.time() + (2 * 24 * 3600)
+        save_settings()
+        
+        try: await query.message.edit_caption(caption=query.message.caption_html + "\n\n❌ <b>REJECTED & BANNED</b> by Admin", parse_mode='HTML')
+        except: pass
+        
+        try: await context.bot.send_message(chat_id=target_id, text=f"🚫 <b>REFILL REJECTED!</b>\n━━━━━━━━━━━━━━━━━━━━\nAn admin has reviewed your recent refill request and found it to be invalid.\n\nThe <b>{amount} TK</b> refund has been deducted from your account, and you are <b>banned from using the refill system for 2 days</b>.", parse_mode='HTML')
+        except: pass
+        return await query.answer("Rejected and banned.")
 
     if action == 'trigger_add_balance':
         context.user_data['state'] = None
