@@ -13,7 +13,7 @@ import io
 import csv
 from html import escape
 from urllib.parse import unquote
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder, 
@@ -326,8 +326,15 @@ def resolve_user(target_str):
     return None
 
 def get_main_keyboard(user_id):
-    kb = [['Get Proxy ✨', '📧 Buy Hotmail'], ['💳 Add Balance', '👤 Profile'], ['💸 Transfer']]
-    if user_id in ADMIN_IDS: kb.append(['⚙️ Admin Menu'])
+    # ⚠️ IMPORTANT: Replace this with the actual URL where you host the report.html file!
+    WEBAPP_URL = "https://proxy.yamin.bd/report.html"
+    
+    kb = [
+        [KeyboardButton('Get Proxy ✨'), KeyboardButton('📧 Buy Hotmail')], 
+        [KeyboardButton('💳 Add Balance'), KeyboardButton('👤 Profile')], 
+        [KeyboardButton('💸 Transfer'), KeyboardButton('📊 Check Report', web_app=WebAppInfo(url=WEBAPP_URL))]
+    ]
+    if user_id in ADMIN_IDS: kb.append([KeyboardButton('⚙️ Admin Menu')])
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
 
 # --- HANDLERS ---
@@ -358,7 +365,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user.username: return
     text = update.message.text.strip() if update.message.text else ""
     
-    main_commands = ['Get Proxy ✨', '📧 Buy Hotmail', '💳 Add Balance', '👤 Profile', '💸 Transfer', '⚙️ Admin Menu']
+    main_commands = ['Get Proxy ✨', '📧 Buy Hotmail', '💳 Add Balance', '👤 Profile', '💸 Transfer', '⚙️ Admin Menu', '📊 Check Report']
     if text in main_commands:
         context.user_data['state'] = None 
         
