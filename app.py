@@ -1,5 +1,6 @@
 import logging
 import requests
+import urllib3
 import re
 import json
 import os
@@ -24,6 +25,9 @@ from telegram.ext import (
     filters
 )
 
+# Disable SSL Warnings from console
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
 # --- CONFIGURATION ---
 TELEGRAM_BOT_TOKEN = "8223325004:AAEIIhDOSAOPmALWmwEHuYeaJpjlzKNGJ1k"
 BOT_USERNAME = "Ismailproxybot"
@@ -35,7 +39,6 @@ PHP_BRIDGE_URL = 'https://proxy.yamin.bd/api.php'
 PHP_BRIDGE_SECRET = 'rubel_proxy_secret_2026'
 
 # --- LOCAL SETTINGS FILE ---
-# Replaces bot_data.json. Only stores non-financial bot configs.
 SETTINGS_FILE = "local_settings.json"
 HOTMAIL_STOCK_FILE = "hotmail_stock.json"
 
@@ -52,7 +55,7 @@ HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': '*/*',
     'X-Requested-With': 'XMLHttpRequest',
-    'Referer': 'http://dichvusocks.net/sockslist',
+    'Referer': 'https://dichvusocks.net/sockslist',
 }
 
 # --- LOCAL SETTINGS MANAGEMENT ---
@@ -67,7 +70,6 @@ def load_settings():
         'used_refill_images': []
     }
 
-    # Normal Settings Load
     if not os.path.exists(SETTINGS_FILE):
         return default_settings
     try:
@@ -96,7 +98,6 @@ def load_hotmail_stock():
 def save_hotmail_stock(stock):
     with open(HOTMAIL_STOCK_FILE, 'w') as f: json.dump(stock, f, indent=4)
 
-# Keep track of temporary payment logs in memory
 PENDING_AUTO_PAYMENTS = {}
 
 def update_headers_with_xsrf():
@@ -111,7 +112,6 @@ update_headers_with_xsrf()
 # --- MYSQL DATABASE API HELPERS ---
 def db_api_request(payload):
     payload['secret'] = PHP_BRIDGE_SECRET
-    # Adding User-Agent ensures Cloudflare/Firewalls don't block empty-agent requests
     req_headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept': 'application/json',
@@ -119,16 +119,15 @@ def db_api_request(payload):
         'Connection': 'keep-alive'
     }
     
-    # Simple retry mechanism for regular API requests
     for attempt in range(3):
         try:
-            res = requests.post(PHP_BRIDGE_URL, json=payload, headers=req_headers, timeout=15)
+            res = requests.post(PHP_BRIDGE_URL, json=payload, headers=req_headers, timeout=15, verify=False)
             return res.json()
         except Exception as e:
             if attempt == 2:
                 print(f"DB API Error after 3 attempts: {e}")
                 return {"error": str(e)}
-            time.sleep(2) # Cool down before retry
+            time.sleep(2)
 
 def db_get_balance(user_id, username=""):
     res = db_api_request({
@@ -148,7 +147,6 @@ def db_update_balance(user_id, amount, description=""):
     return res.get('success', False)
 
 def db_log_proxy_purchase(user_id, cost, proxy_details):
-    # This securely deducts balance AND logs the proxy in MySQL in one atomic action
     res = db_api_request({
         'action': 'log_proxy',
         'telegram_id': str(user_id),
@@ -172,14 +170,12 @@ def _sync_create_piprapay(amount, user_id):
     return None, None, None
 
 def _sync_verify_piprapay(order_id, pp_id):
-    # Sends verify request. If paid, PHP handles adding the balance automatically!
     res = db_api_request({
         'action': 'verify',
         'order_id': order_id,
         'pp_id': pp_id,
         'invoice_id': pp_id 
     })
-    # If the PHP script returns success=true, it means it's paid and balance was handled.
     if res.get('success') is True:
         return True
     return False
@@ -187,18 +183,17 @@ def _sync_verify_piprapay(order_id, pp_id):
 # --- AUTO PAYMENT MONITOR (BACKGROUND TASK) ---
 async def monitor_payment(context: ContextTypes.DEFAULT_TYPE, order_id: str, user_id: int, amount: float, pp_id: str, chat_id: int, message_id: int):
     loop = asyncio.get_running_loop()
-    max_attempts = 24  # Check for 10 minutes (24 attempts * 25 seconds)
+    max_attempts = 24  
     
     for _ in range(max_attempts):
-        await asyncio.sleep(25)  # SLOWED DOWN: Wait 25 seconds to prevent Server IP Blocks
+        await asyncio.sleep(25)  
         
         if order_id not in PENDING_AUTO_PAYMENTS:
-            break # Order was removed/handled
+            break 
             
         is_paid_and_handled = await loop.run_in_executor(None, _sync_verify_piprapay, order_id, pp_id)
         
         if is_paid_and_handled:
-            # PHP already added the balance to MySQL! We just need to notify the user.
             success_msg = (
                 f"✅ <b>PAYMENT AUTO-VERIFIED!</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -212,7 +207,6 @@ async def monitor_payment(context: ContextTypes.DEFAULT_TYPE, order_id: str, use
                 await context.bot.send_message(chat_id=user_id, text=success_msg, parse_mode='HTML')
             except: pass
             
-            # Notify Admin Log Group
             log_receipt = (
                 f"💰 <b>New Auto-Deposit Notification!</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -238,7 +232,6 @@ async def monitor_payment(context: ContextTypes.DEFAULT_TYPE, order_id: str, use
             PENDING_AUTO_PAYMENTS.pop(order_id, None)
             break
     else:
-        # Loop expired
         PENDING_AUTO_PAYMENTS.pop(order_id, None)
         try:
             await context.bot.edit_message_text(
@@ -249,14 +242,15 @@ async def monitor_payment(context: ContextTypes.DEFAULT_TYPE, order_id: str, use
 
 # --- PROXY API LOGIC ---
 def _sync_get_available_proxies(country_full_name):
-    url = "http://dichvusocks.net/api/socks/data"
+    url = "https://dichvusocks.net/api/socks/data"
     params = {
         'auth': '', 'useType': '', 'country': country_full_name,
         'region': '', 'city': '', 'blacklist': 'no',
         'zipcode': '', 'Host': '', 'page': '1', 'limit': '200' 
     }
     try:
-        response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        # Added verify=False to bypass SSL errors
+        response = requests.get(url, headers=HEADERS, params=params, timeout=10, verify=False)
         if response.status_code == 200:
             data = response.json()
             rows = data.get('rows', [])
@@ -275,14 +269,15 @@ def _sync_get_available_proxies(country_full_name):
         return [], str(e)
 
 def _sync_fetch_proxy_obj_random(country_full_name, region=''):
-    url = "http://dichvusocks.net/api/socks/data"
+    url = "https://dichvusocks.net/api/socks/data"
     params = {
         'auth': '', 'useType': '', 'country': country_full_name,
         'region': region, 'city': '', 'blacklist': 'no', 
         'zipcode': '', 'Host': '', 'page': '1', 'limit': '20'
     }
     try:
-        response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        # Added verify=False to bypass SSL errors
+        response = requests.get(url, headers=HEADERS, params=params, timeout=10, verify=False)
         if response.status_code == 200:
             data = response.json()
             proxy_list = data.get('rows', [])
@@ -293,10 +288,11 @@ def _sync_fetch_proxy_obj_random(country_full_name, region=''):
         return None, str(e)
 
 def _sync_reveal_credentials(proxy_id):
-    url = "http://dichvusocks.net/api/socks/view"
+    url = "https://dichvusocks.net/api/socks/view"
     params = {'id': proxy_id}
     try:
-        response = requests.get(url, headers=HEADERS, params=params, timeout=10)
+        # Added verify=False to bypass SSL errors
+        response = requests.get(url, headers=HEADERS, params=params, timeout=10, verify=False)
         if response.status_code == 200:
             data = response.json()
             if data.get('success') is True and 'data' in data:
@@ -347,7 +343,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     SETTINGS['username_map'][user.username.lower()] = user.id
     save_settings()
     
-    # Initialize user in MySQL DB
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, db_get_balance, user.id, user.username)
 
@@ -821,11 +816,10 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
         except: pass
         return
 
-    # 3. ATOMIC DB DEDUCTION (The safest part!)
+    # 3. ATOMIC DB DEDUCTION 
     db_res = await loop.run_in_executor(None, db_log_proxy_purchase, user.id, price, creds)
     
     if not db_res.get('success'):
-        # They ran out of money during the 1 second it took to fetch the proxy!
         try: await status_msg.edit_text("❌ <b>Error:</b> Insufficient balance during final processing.", parse_mode='HTML')
         except: pass
         return
@@ -872,7 +866,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try: await query.message.edit_text("❌ <b>Action cancelled.</b>", parse_mode='HTML')
         except: pass
         return
-
+        
     if action == 'trigger_refill':
         ban_expiry = SETTINGS.get('refill_bans', {}).get(str(user.id), 0)
         if time.time() < ban_expiry:
@@ -980,9 +974,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await query.answer("⚠️ Payment already processed or expired.", show_alert=True)
 
         if is_approve:
-            # We don't have the amount directly in PENDING_AUTO_PAYMENTS, so admin manual approve here 
-            # is tricky without local storage of amount. You could fetch from DB `payments` table.
-            # For safety, DB forced approve is better handled directly in phpmyadmin.
             await query.answer("❌ Please use phpMyAdmin to force approve auto-deposits now.", show_alert=True)
         else:
             PENDING_AUTO_PAYMENTS.pop(order_id, None)
@@ -1030,12 +1021,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except: pass
             return await query.answer("Insufficient balance!", show_alert=True)
             
-        # Deduct balance via MySQL
         success = await loop.run_in_executor(None, db_update_balance, user.id, -total_cost, f"Bought {qty} Hotmail accounts")
         if not success:
             return await query.answer("Database error. Try again.", show_alert=True)
             
-        # Pop stock and save
         bought_accs = stock[:qty]
         stock = stock[qty:]
         save_hotmail_stock(stock)
@@ -1048,7 +1037,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if fmt == 'text':
             accs_str = "\n".join(bought_accs)
             if len(accs_str) > 3800:
-                fmt = 'txt' # Fallback if text is too long for Telegram
+                fmt = 'txt' 
             else:
                 await context.bot.send_message(chat_id=user.id, text=f"{success_msg}\n\n<code>{accs_str}</code>", parse_mode='HTML')
                 
@@ -1067,7 +1056,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             file_content = output.getvalue().encode('utf-8')
             await context.bot.send_document(chat_id=user.id, document=file_content, filename=f"Hotmail_{qty}_Accounts.csv", caption=success_msg, parse_mode='HTML')
             
-        # Log purchase globally
         log_receipt = f"📧 <b>Hotmail Purchased</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 User: @{escape(str(user.username))} (<code>{user.id}</code>)\n📦 Qty: {qty}\n💰 Spent: {total_cost} TK"
         try: await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_receipt, parse_mode='HTML')
         except: pass
@@ -1106,7 +1094,6 @@ if __name__ == '__main__':
     application.add_handler(CommandHandler('credit', cmd_credit))
     application.add_handler(CommandHandler('setprice', cmd_set_price))
     
-    # Updated message handler to accept document uploads (for txt file restocks)
     application.add_handler(MessageHandler((filters.TEXT | filters.PHOTO | filters.Document.ALL) & (~filters.COMMAND), handle_message))
     
     application.add_handler(CallbackQueryHandler(button_click))
