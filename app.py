@@ -52,7 +52,7 @@ HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     'Accept': '*/*',
     'X-Requested-With': 'XMLHttpRequest',
-    'Referer': 'https://dichvusocks.net/sockslist',
+    'Referer': 'http://dichvusocks.net/sockslist',
 }
 
 # --- LOCAL SETTINGS MANAGEMENT ---
@@ -249,7 +249,7 @@ async def monitor_payment(context: ContextTypes.DEFAULT_TYPE, order_id: str, use
 
 # --- PROXY API LOGIC ---
 def _sync_get_available_proxies(country_full_name):
-    url = "https://dichvusocks.net/api/socks/data"
+    url = "http://dichvusocks.net/api/socks/data"
     params = {
         'auth': '', 'useType': '', 'country': country_full_name,
         'region': '', 'city': '', 'blacklist': 'no',
@@ -275,7 +275,7 @@ def _sync_get_available_proxies(country_full_name):
         return [], str(e)
 
 def _sync_fetch_proxy_obj_random(country_full_name, region=''):
-    url = "https://dichvusocks.net/api/socks/data"
+    url = "http://dichvusocks.net/api/socks/data"
     params = {
         'auth': '', 'useType': '', 'country': country_full_name,
         'region': region, 'city': '', 'blacklist': 'no', 
@@ -293,7 +293,7 @@ def _sync_fetch_proxy_obj_random(country_full_name, region=''):
         return None, str(e)
 
 def _sync_reveal_credentials(proxy_id):
-    url = "https://dichvusocks.net/api/socks/view"
+    url = "http://dichvusocks.net/api/socks/view"
     params = {'id': proxy_id}
     try:
         response = requests.get(url, headers=HEADERS, params=params, timeout=10)
