@@ -449,6 +449,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             SETTINGS['used_refill_images'] = used_images[-5000:]
             
         price = SETTINGS.get('proxy_price', 10)
+        proxy_info = context.user_data.get('refill_proxy_info', 'Unknown Proxy')
         
         # Auto refund via DB
         loop = asyncio.get_running_loop()
@@ -457,13 +458,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(f"✅ <b>REFILL SUCCESSFUL!</b>\n━━━━━━━━━━━━━━━━━━━━\nYour screenshot has been accepted and <b>{price} TK</b> has been refunded to your account.\n\n<i>Note: An admin will review this. If it is found to be fake, your refund will be reversed and you will be banned.</i>", parse_mode='HTML')
         context.user_data['state'] = None
+        context.user_data.pop('refill_proxy_info', None)
         
         # Send to admin log group
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Verify OK", callback_data="refill_ok")],
             [InlineKeyboardButton("❌ Reject & Ban (2 Days)", callback_data=f"refill_reject_{user.id}_{price}")]
         ])
-        caption = f"♻️ <b>Auto-Refill Issued</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 User: @{user.username} (<code>{user.id}</code>)\n💰 Refunded: <b>{price} TK</b>\n━━━━━━━━━━━━━━━━━━━━\nPlease verify the screenshot."
+        caption = f"♻️ <b>Auto-Refill Issued</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 User: @{user.username} (<code>{user.id}</code>)\n💰 Refunded: <b>{price} TK</b>\n🔌 <b>Proxy:</b> <code>{proxy_info}</code>\n━━━━━━━━━━━━━━━━━━━━\nPlease verify the screenshot."
         try: await context.bot.send_photo(chat_id=LOG_GROUP_ID, photo=photo_id, caption=caption, parse_mode='HTML', reply_markup=kb)
         except: pass
         return
@@ -872,6 +874,16 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if time.time() < ban_expiry:
             remaining_hours = int((ban_expiry - time.time()) / 3600)
             return await query.answer(f"🚫 You are banned from refilling for {remaining_hours} hours due to previous fake or duplicate submissions.", show_alert=True)
+        
+        proxy_str = "Unknown Proxy"
+        if query.message and query.message.text:
+            lines = query.message.text.split('\n')
+            for i, line in enumerate(lines):
+                if "Format (IP:Port:User:Pass):" in line:
+                    if i + 1 < len(lines):
+                        proxy_str = lines[i+1].strip()
+                        break
+        context.user_data['refill_proxy_info'] = proxy_str
         
         context.user_data['state'] = 'awaiting_refill_image'
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
