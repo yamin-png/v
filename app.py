@@ -324,11 +324,13 @@ def resolve_user(target_str):
 def get_main_keyboard(user_id):
     # ⚠️ IMPORTANT: Replace this with the actual URL where you host the report.html file!
     WEBAPP_URL = "https://proxy.yamin.bd/report.html"
+    CODE_WEBAPP_URL = "https://code.yamin.bd"
     
     kb = [
         [KeyboardButton('Get Proxy ✨'), KeyboardButton('📧 Buy Hotmail')], 
         [KeyboardButton('💳 Add Balance'), KeyboardButton('👤 Profile')], 
-        [KeyboardButton('💸 Transfer'), KeyboardButton('📊 Check Report', web_app=WebAppInfo(url=WEBAPP_URL))]
+        [KeyboardButton('💸 Transfer'), KeyboardButton('📊 Check Report', web_app=WebAppInfo(url=WEBAPP_URL))],
+        [KeyboardButton('🔐 Get Code', web_app=WebAppInfo(url=CODE_WEBAPP_URL))]
     ]
     if user_id in ADMIN_IDS: kb.append([KeyboardButton('⚙️ Admin Menu')])
     return ReplyKeyboardMarkup(kb, resize_keyboard=True)
@@ -360,7 +362,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user.username: return
     text = update.message.text.strip() if update.message.text else ""
     
-    main_commands = ['Get Proxy ✨', '📧 Buy Hotmail', '💳 Add Balance', '👤 Profile', '💸 Transfer', '⚙️ Admin Menu', '📊 Check Report']
+    main_commands = ['Get Proxy ✨', '📧 Buy Hotmail', '💳 Add Balance', '👤 Profile', '💸 Transfer', '⚙️ Admin Menu', '📊 Check Report', '🔐 Get Code']
     if text in main_commands:
         context.user_data['state'] = None 
         
@@ -1009,7 +1011,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == 'admin_addhm' and user.id in ADMIN_IDS:
         context.user_data['state'] = 'awaiting_hotmail_file'
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-        await query.message.edit_text(f"📥 <b>ADD HOTMAIL STOCK</b>\n━━━━━━━━━━━━━━━━━━━━\nPlease upload a <b>.txt</b> file containing the accounts.\n\n<i>Format: email\\tpassword or email:password</i>", parse_mode='HTML', reply_markup=kb)
+        await query.message.edit_text(f"📥 <b>ADD HOTMAIL STOCK</b>\n━━━━━━━━━━━━━━━━━━━━\nPlease upload a <b>.txt</b> file containing the accounts.\n\n<i>Format: email|password|cookie|guid</i>", parse_mode='HTML', reply_markup=kb)
         return
 
     if action.startswith('hm_fmt_'):
@@ -1051,7 +1053,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(accs_str) > 3800:
                 fmt = 'txt' 
             else:
-                await context.bot.send_message(chat_id=user.id, text=f"{success_msg}\n\n<code>{accs_str}</code>", parse_mode='HTML')
+                # Escape HTML specific characters in cookie string to prevent Telegram parse errors
+                safe_accs_str = escape(accs_str)
+                await context.bot.send_message(chat_id=user.id, text=f"{success_msg}\n\n<code>{safe_accs_str}</code>", parse_mode='HTML')
                 
         if fmt == 'txt':
             file_content = "\n".join(bought_accs).encode('utf-8')
@@ -1060,11 +1064,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if fmt == 'excel':
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(['Email', 'Password'])
+            writer.writerow(['Account Data'])
             for acc in bought_accs:
-                parts = re.split(r'\t|:', acc, maxsplit=1)
-                if len(parts) == 2: writer.writerow(parts)
-                else: writer.writerow([acc, ''])
+                # Puro token-ta ek column e save hobe
+                writer.writerow([acc])
             file_content = output.getvalue().encode('utf-8')
             await context.bot.send_document(chat_id=user.id, document=file_content, filename=f"Hotmail_{qty}_Accounts.csv", caption=success_msg, parse_mode='HTML')
             
