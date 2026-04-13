@@ -12,8 +12,6 @@ import math
 import time
 import io
 import csv
-import hmac
-import hashlib
 from html import escape
 from urllib.parse import unquote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
@@ -36,9 +34,7 @@ BOT_USERNAME = "Ismailproxybot"
 ADMIN_IDS = [6616624640, 5473188537]
 LOG_GROUP_ID = -1003280360902
 
-# --- BINANCE AUTO PAY CONFIG ---
-BINANCE_API_KEY = 'HFQIJQWE4ZhV0iLtbRBL1KsXSqLr7gSoQBGAIYHCe0TlZh7YBAKWjF4hBTpkbViW'
-BINANCE_API_SECRET = 'wJWeFLorro9nT5BHZQYtQvEoe93EJrLLk1dJQYVffFgorIzj8bLoXhQ7MuVuqGpC'
+# --- BINANCE CONFIG ---
 BINANCE_RATE = 125
 BINANCE_UID = '805398719'
 
@@ -118,7 +114,7 @@ def update_headers_with_xsrf():
 
 update_headers_with_xsrf()
 
-# --- MYSQL DATABASE API HELPERS ---
+# --- API HELPERS ---
 def db_api_request(payload):
     payload['secret'] = PHP_BRIDGE_SECRET
     req_headers = {
@@ -189,50 +185,27 @@ def _sync_verify_piprapay(order_id, pp_id):
         return True
     return False
 
-# --- BINANCE API HELPER ---
+# --- NEW: BINANCE VERIFY VIA PHP ---
 def verify_binance_payment(target_order_id):
-    endpoint = '/sapi/v1/pay/transactions'
-    timestamp = int(time.time() * 1000)
+    # পাইথন ডাইরেক্ট বাইনান্সকে কল না করে PHP কে কল করবে
+    res = db_api_request({
+        'action': 'verify_binance',
+        'order_id': target_order_id
+    })
     
-    params = {
-        'timestamp': timestamp,
-        'recvWindow': 60000
-    }
+    if 'error' in res and not res.get('success'):
+        return {"status": "error", "message": res.get('error')}
     
-    query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
-    signature = hmac.new(
-        BINANCE_API_SECRET.encode('utf-8'),
-        query_string.encode('utf-8'),
-        hashlib.sha256
-    ).hexdigest()
-    
-    url = f"https://api.binance.com{endpoint}?{query_string}&signature={signature}"
-    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return {"status": "error", "message": f"API Error: {response.status_code}"}
+    if res.get('success') is True and res.get('status') == 'success':
+        return {"status": "success", "amount": res.get('amount'), "payer": res.get('payer')}
         
-        result = response.json()
-        if 'data' not in result:
-            return {"status": "error", "message": "No data returned"}
-            
-        for trade in result['data']:
-            if str(trade.get('orderId')) == str(target_order_id):
-                amount = float(trade.get('amount', 0))
-                currency = trade.get('currency', 'USDT')
-                
-                if currency != 'USDT':
-                    return {"status": "wrong_currency", "currency": currency}
-                    
-                if amount > 0:
-                    payer = trade.get('payerInfo', {}).get('name', 'Unknown')
-                    return {"status": "success", "amount": amount, "payer": payer}
-                    
-        return {"status": "not_found"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    if res.get('status') == 'wrong_currency':
+        return {"status": "wrong_currency", "currency": res.get('currency')}
+        
+    if res.get('status') == 'not_found':
+         return {"status": "not_found"}
+         
+    return {"status": "error", "message": res.get('message', 'Unknown Error from PHP')}
 
 # --- AUTO PAYMENT MONITOR (BACKGROUND TASK) ---
 async def monitor_payment(context: ContextTypes.DEFAULT_TYPE, order_id: str, user_id: int, amount: float, pp_id: str, chat_id: int, message_id: int):
@@ -303,7 +276,6 @@ def _sync_get_available_proxies(country_full_name):
         'zipcode': '', 'Host': '', 'page': '1', 'limit': '200' 
     }
     try:
-        # Added verify=False to bypass SSL errors
         response = requests.get(url, headers=HEADERS, params=params, timeout=10, verify=False)
         if response.status_code == 200:
             data = response.json()
@@ -330,7 +302,6 @@ def _sync_fetch_proxy_obj_random(country_full_name, region=''):
         'zipcode': '', 'Host': '', 'page': '1', 'limit': '20'
     }
     try:
-        # Added verify=False to bypass SSL errors
         response = requests.get(url, headers=HEADERS, params=params, timeout=10, verify=False)
         if response.status_code == 200:
             data = response.json()
@@ -345,7 +316,6 @@ def _sync_reveal_credentials(proxy_id):
     url = "https://dichvusocks.net/api/socks/view"
     params = {'id': proxy_id}
     try:
-        # Added verify=False to bypass SSL errors
         response = requests.get(url, headers=HEADERS, params=params, timeout=10, verify=False)
         if response.status_code == 200:
             data = response.json()
@@ -376,7 +346,6 @@ def resolve_user(target_str):
     return None
 
 def get_main_keyboard(user_id):
-    # ⚠️ IMPORTANT: Replace this with the actual URL where you host the report.html file!
     WEBAPP_URL = "https://proxy.yamin.bd/report.html"
     CODE_WEBAPP_URL = "https://code.yamin.bd"
     
@@ -438,7 +407,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == '💳 Add Balance':
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("⚡ PipraPay (Auto Deposit)", callback_data="pay_piprapay")],
-                [InlineKeyboardButton("🟡 Binance (Manual)", callback_data="pay_binance")],
+                [InlineKeyboardButton("🟡 Binance (Auto)", callback_data="pay_binance")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]
             ])
             await update.message.reply_text("💳 <b>ADD BALANCE</b>\n━━━━━━━━━━━━━━━━━━━━\nChoose your preferred payment method below.\nAuto-payments are credited <b>instantly</b>! ⚡", parse_mode='HTML', reply_markup=kb)
@@ -493,13 +462,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bans = SETTINGS.setdefault('refill_bans', {})
         
         if unique_id in used_images:
-            # Duplicate detected! Ban for 2 days
             bans[str(user.id)] = time.time() + (2 * 24 * 3600)
             save_settings()
             context.user_data['state'] = None
             return await update.message.reply_text("🚫 <b>DUPLICATE IMAGE DETECTED!</b>\n━━━━━━━━━━━━━━━━━━━━\nYou submitted an image that has already been used for a refill.\nAs per our policy, you are now <b>banned from using the refill system for 2 days</b>.", parse_mode='HTML')
         
-        # Not a duplicate. Issue refund.
         used_images.append(unique_id)
         if len(used_images) > 10000:
             SETTINGS['used_refill_images'] = used_images[-5000:]
@@ -507,7 +474,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price = SETTINGS.get('proxy_price', 10)
         proxy_info = context.user_data.get('refill_proxy_info', 'Unknown Proxy')
         
-        # Auto refund via DB
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, db_update_balance, user.id, price, "Proxy Refill Auto-Refund")
         save_settings()
@@ -516,7 +482,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['state'] = None
         context.user_data.pop('refill_proxy_info', None)
         
-        # Send to admin log group
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Verify OK", callback_data="refill_ok")],
             [InlineKeyboardButton("❌ Reject & Ban (2 Days)", callback_data=f"refill_reject_{user.id}_{price}")]
@@ -589,7 +554,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order_id = text.strip()
         if not order_id: return await update.message.reply_text("❌ Please enter a valid Order ID.")
         
-        # Check for duplicate submission
         if order_id in SETTINGS.get('used_binance_orders', []):
             return await update.message.reply_text("❌ <b>Order ID Already Used!</b> This payment has already been verified and credited.", parse_mode='HTML')
             
@@ -616,7 +580,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            f"💵 Sent: <b>{usdt_amount} USDT</b>\n"
                            f"💰 Added: <b>{amount_tk} TK</b>\n"
                            f"🧾 Order ID: <code>{order_id}</code>\n"
-                           f"━━━━━━━━━━━━━━━━━━━━\n✅ Status: Successfully Auto-Added")
+                           f"━━━━━━━━━━━━━━━━━━━━\n✅ Status: Successfully Auto-Added via PHP")
                 try: await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_msg, parse_mode='HTML')
                 except: pass
             else:
@@ -700,7 +664,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             target_id = context.user_data.get('transfer_target')
             
-            # Atomic DB update
             await loop.run_in_executor(None, db_update_balance, user.id, -amount, f"Transfer out to {target_id}")
             await loop.run_in_executor(None, db_update_balance, target_id, amount, f"Transfer in from {user.id}")
             
@@ -836,7 +799,6 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
     loop = asyncio.get_running_loop()
     price = SETTINGS.get('proxy_price', 10)
     
-    # 1. DB Balance Check
     bal = await loop.run_in_executor(None, db_get_balance, user.id)
     if bal < price:
         err = f"❌ <b>INSUFFICIENT BALANCE!</b>\n━━━━━━━━━━━━━━━━━━━━\n💰 Your Balance: <b>{bal} TK</b>\n🚀 Proxy Price: <b>{price} TK</b>\n\nPlease click <b>💳 Add Balance</b> below."
@@ -853,7 +815,6 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
         except: pass
     else: status_msg = await context.bot.send_message(chat_id=user.id, text="⏳ <i>Unlocking premium proxy...</i>", parse_mode='HTML')
 
-    # 2. Fetch Proxy Details
     if proxy_id:
         p_list = context.user_data.get('regions_list', [])
         p_obj = next((p for p in p_list if str(p['id']) == str(proxy_id)), {})
@@ -875,7 +836,6 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
         except: pass
         return
 
-    # 3. ATOMIC DB DEDUCTION 
     db_res = await loop.run_in_executor(None, db_log_proxy_purchase, user.id, price, creds)
     
     if not db_res.get('success'):
@@ -883,7 +843,6 @@ async def process_proxy_fetch(message_obj, country, region, context, user, proxy
         except: pass
         return
 
-    # 4. Display Success
     try: ip, port, u, p = creds.split(':')
     except: ip, port, u, p = "N/A", "N/A", "N/A", "N/A"
     
@@ -961,11 +920,9 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = parts[2]
         amount = float(parts[3])
         
-        # Reverse refund via MySQL
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, db_update_balance, target_id, -amount, "Admin Rejected Refill")
         
-        # Ban user for 2 Days
         SETTINGS.setdefault('refill_bans', {})[str(target_id)] = time.time() + (2 * 24 * 3600)
         save_settings()
         
@@ -980,7 +937,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['state'] = None
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⚡ PipraPay (Auto Deposit)", callback_data="pay_piprapay")],
-            [InlineKeyboardButton("🟡 Binance (Manual)", callback_data="pay_binance")],
+            [InlineKeyboardButton("🟡 Binance (Auto)", callback_data="pay_binance")],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]
         ])
         msg = "💳 <b>ADD BALANCE</b>\n━━━━━━━━━━━━━━━━━━━━\nChoose your preferred payment method below.\nAuto-payments are credited <b>instantly</b>! ⚡"
@@ -1002,11 +959,10 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
                f"Binance UID: <code>{BINANCE_UID}</code>\n\n"
                f"1️⃣ Send any amount of <b>USDT</b> to the UID above.\n"
                f"2️⃣ Paste your <b>Order ID (Transaction ID)</b> here after sending:")
-        
         try: await query.message.edit_text(msg, parse_mode='HTML', reply_markup=kb)
         except: await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='HTML', reply_markup=kb)
         return
-        
+
     if action.startswith('pdec_a_') or action.startswith('pdec_r_'):
         if user.id not in ADMIN_IDS: return await query.answer("❌ Unauthorized!", show_alert=True)
             
@@ -1082,7 +1038,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(accs_str) > 3800:
                 fmt = 'txt' 
             else:
-                # Escape HTML specific characters in cookie string to prevent Telegram parse errors
                 safe_accs_str = escape(accs_str)
                 await context.bot.send_message(chat_id=user.id, text=f"{success_msg}\n\n<code>{safe_accs_str}</code>", parse_mode='HTML')
                 
@@ -1095,7 +1050,6 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
             writer = csv.writer(output)
             writer.writerow(['Account Data'])
             for acc in bought_accs:
-                # Puro token-ta ek column e save hobe
                 writer.writerow([acc])
             file_content = output.getvalue().encode('utf-8')
             await context.bot.send_document(chat_id=user.id, document=file_content, filename=f"Hotmail_{qty}_Accounts.csv", caption=success_msg, parse_mode='HTML')
