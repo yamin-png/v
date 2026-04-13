@@ -12,6 +12,8 @@ import math
 import time
 import io
 import csv
+import hmac
+import hashlib
 from html import escape
 from urllib.parse import unquote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
@@ -33,6 +35,12 @@ TELEGRAM_BOT_TOKEN = "8223325004:AAEIIhDOSAOPmALWmwEHuYeaJpjlzKNGJ1k"
 BOT_USERNAME = "Ismailproxybot"
 ADMIN_IDS = [6616624640, 5473188537]
 LOG_GROUP_ID = -1003280360902
+
+# --- BINANCE AUTO PAY CONFIG ---
+BINANCE_API_KEY = 'nBV27HSPeQ0ZtVGc3j6LR3uGVGCUfHh2VVsyKcOO6phcFvQw1uUy8ttT7IY1rWu3'
+BINANCE_API_SECRET = 'dlVkGPixLzsd4jjIibDnx6QpCXAXV3iGvG68oAsKuIAU0Z5XHguzrHxxVUGMestJ'
+BINANCE_RATE = 125
+BINANCE_UID = '805398719'
 
 # --- PHP DATABASE API CONFIG ---
 PHP_BRIDGE_URL = 'https://proxy.yamin.bd/api.php'
@@ -67,7 +75,8 @@ def load_settings():
         'username_map': {},
         'manual_payments': {},
         'refill_bans': {},
-        'used_refill_images': []
+        'used_refill_images': [],
+        'used_binance_orders': []
     }
 
     if not os.path.exists(SETTINGS_FILE):
@@ -179,6 +188,51 @@ def _sync_verify_piprapay(order_id, pp_id):
     if res.get('success') is True:
         return True
     return False
+
+# --- BINANCE API HELPER ---
+def verify_binance_payment(target_order_id):
+    endpoint = '/sapi/v1/pay/transactions'
+    timestamp = int(time.time() * 1000)
+    
+    params = {
+        'timestamp': timestamp,
+        'recvWindow': 60000
+    }
+    
+    query_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+    signature = hmac.new(
+        BINANCE_API_SECRET.encode('utf-8'),
+        query_string.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+    
+    url = f"https://api.binance.com{endpoint}?{query_string}&signature={signature}"
+    headers = {"X-MBX-APIKEY": BINANCE_API_KEY}
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            return {"status": "error", "message": f"API Error: {response.status_code}"}
+        
+        result = response.json()
+        if 'data' not in result:
+            return {"status": "error", "message": "No data returned"}
+            
+        for trade in result['data']:
+            if str(trade.get('orderId')) == str(target_order_id):
+                amount = float(trade.get('amount', 0))
+                currency = trade.get('currency', 'USDT')
+                
+                if currency != 'USDT':
+                    return {"status": "wrong_currency", "currency": currency}
+                    
+                if amount > 0:
+                    payer = trade.get('payerInfo', {}).get('name', 'Unknown')
+                    return {"status": "success", "amount": amount, "payer": payer}
+                    
+        return {"status": "not_found"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 # --- AUTO PAYMENT MONITOR (BACKGROUND TASK) ---
 async def monitor_payment(context: ContextTypes.DEFAULT_TYPE, order_id: str, user_id: int, amount: float, pp_id: str, chat_id: int, message_id: int):
@@ -531,50 +585,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         except ValueError: return await update.message.reply_text("❌ Please enter a valid number.")
 
-    if state == 'awaiting_binance_ss':
-        if not update.message.photo:
-            await update.message.reply_text("❌ <b>Error:</b> Please send a screenshot (photo) of your Binance transaction.", parse_mode='HTML')
-            return
-            
-        photo_file_id = update.message.photo[-1].file_id
-        amount = context.user_data.get('binance_amount')
-        trx_id = context.user_data.get('binance_trx')
-        
-        order_id = f"MAN_{user.id}_{int(time.time())}"
-        SETTINGS.setdefault('manual_payments', {})[order_id] = {
-            'user_id': user.id, 'amount': amount, 'trx_id': trx_id, 'status': 'pending'
-        }
-        save_settings()
-        
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Approve", callback_data=f"man_approve_{order_id}"),
-             InlineKeyboardButton("❌ Reject", callback_data=f"man_reject_{order_id}")]
-        ])
-        
-        caption = f"🟡 <b>Manual Binance Payment Request</b>\n━━━━━━━━━━━━━━━━━━━━\n👤 User: @{user.username} (<code>{user.id}</code>)\n💰 Amount: <b>{amount} TK</b>\n🧾 Trx ID: <code>{trx_id}</code>\n━━━━━━━━━━━━━━━━━━━━\nStatus: Pending Admin Review"
-        await context.bot.send_photo(chat_id=LOG_GROUP_ID, photo=photo_file_id, caption=caption, parse_mode='HTML', reply_markup=kb)
-        await update.message.reply_text("✅ <b>PAYMENT SUBMITTED!</b>\n━━━━━━━━━━━━━━━━━━━━\nYour screenshot and Transaction ID have been sent to the admins for verification.", parse_mode='HTML')
-        context.user_data['state'] = None
-        return
-
-    if state == 'awaiting_binance_amount':
-        try:
-            amount = float(text)
-            if amount <= 0: return await update.message.reply_text("❌ Amount must be greater than 0.")
-            context.user_data['binance_amount'] = amount
-            context.user_data['state'] = 'awaiting_binance_trx'
-            kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-            msg = f"🟡 <b>BINANCE DEPOSIT</b>\n━━━━━━━━━━━━━━━━━━━━\n💰 Deposit Amount: <b>{amount} TK</b>\n\nPlease transfer this amount to Binance UID: <code>805398719</code>\n\nAfter transferring, please enter your <b>Order ID</b> (Transaction Hash/ID):"
-            await update.message.reply_text(msg, parse_mode='HTML', reply_markup=kb)
-            return
-        except ValueError: return await update.message.reply_text("❌ Please enter a valid number.")
-
     if state == 'awaiting_binance_trx':
-        if not text: return await update.message.reply_text("❌ Please enter a valid Order ID.")
-        context.user_data['binance_trx'] = text
-        context.user_data['state'] = 'awaiting_binance_ss'
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-        await update.message.reply_text("📸 <b>ALMOST DONE!</b>\n━━━━━━━━━━━━━━━━━━━━\nPlease upload a <b>Screenshot</b> of your successful Binance transaction as proof:", parse_mode='HTML', reply_markup=kb)
+        order_id = text.strip()
+        if not order_id: return await update.message.reply_text("❌ Please enter a valid Order ID.")
+        
+        # Check for duplicate submission
+        if order_id in SETTINGS.get('used_binance_orders', []):
+            return await update.message.reply_text("❌ <b>Order ID Already Used!</b> This payment has already been verified and credited.", parse_mode='HTML')
+            
+        status_msg = await update.message.reply_text("⏳ <i>Connecting to Binance & Verifying Payment...</i>", parse_mode='HTML')
+        
+        loop = asyncio.get_running_loop()
+        check = await loop.run_in_executor(None, verify_binance_payment, order_id)
+        
+        if check['status'] == 'success':
+            usdt_amount = check['amount']
+            amount_tk = round(usdt_amount * BINANCE_RATE, 2)
+            
+            success = await loop.run_in_executor(None, db_update_balance, user.id, amount_tk, f"Binance Auto Deposit {order_id}")
+            if success:
+                SETTINGS.setdefault('used_binance_orders', []).append(order_id)
+                if len(SETTINGS['used_binance_orders']) > 5000:
+                    SETTINGS['used_binance_orders'] = SETTINGS['used_binance_orders'][-2000:]
+                save_settings()
+                
+                await status_msg.edit_text(f"✅ <b>BINANCE PAYMENT VERIFIED!</b>\n━━━━━━━━━━━━━━━━━━━━\nReceived: <b>{usdt_amount} USDT</b>\nConverted: <b>{amount_tk} TK</b>\nSender: <b>{check['payer']}</b>\n\nBalance added successfully! Enjoy!", parse_mode='HTML')
+                
+                log_msg = (f"🟡 <b>Binance Auto Deposit</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+                           f"👤 User: @{escape(str(user.username))} (<code>{user.id}</code>)\n"
+                           f"💵 Sent: <b>{usdt_amount} USDT</b>\n"
+                           f"💰 Added: <b>{amount_tk} TK</b>\n"
+                           f"🧾 Order ID: <code>{order_id}</code>\n"
+                           f"━━━━━━━━━━━━━━━━━━━━\n✅ Status: Successfully Auto-Added")
+                try: await context.bot.send_message(chat_id=LOG_GROUP_ID, text=log_msg, parse_mode='HTML')
+                except: pass
+            else:
+                await status_msg.edit_text("❌ <b>Database Error:</b> Payment verified but failed to update balance. Please contact admin.", parse_mode='HTML')
+                
+        elif check['status'] == 'wrong_currency':
+            await status_msg.edit_text(f"❌ <b>Wrong Currency!</b>\nYou paid in {check['currency']}, but we only accept USDT.", parse_mode='HTML')
+        elif check['status'] == 'not_found':
+            await status_msg.edit_text("❌ <b>Payment Not Found!</b>\nWe couldn't find this Order ID in our recent Binance transactions. Ensure you entered the correct ID and that the transfer was successful.", parse_mode='HTML')
+        else:
+            await status_msg.edit_text(f"❌ <b>API Error:</b> {check.get('message', 'Unknown error')}", parse_mode='HTML')
+            
+        context.user_data['state'] = None
         return
         
     if state == 'awaiting_deposit':
@@ -940,42 +995,16 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     if action == 'pay_binance':
-        context.user_data['state'] = 'awaiting_binance_amount'
+        context.user_data['state'] = 'awaiting_binance_trx'
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-        await query.message.edit_text("🟡 <b>BINANCE MANUAL DEPOSIT</b>\n━━━━━━━━━━━━━━━━━━━━\nBinance UID: <code>805398719</code>\n\n💰 How much TK are you depositing?\n<i>Enter the amount below:</i>", parse_mode='HTML', reply_markup=kb)
-        return
-
-    if action.startswith('man_approve_') or action.startswith('man_reject_'):
-        if user.id not in ADMIN_IDS: return await query.answer("❌ Unauthorized!", show_alert=True)
-            
-        order_id = action.replace('man_approve_', '').replace('man_reject_', '')
-        order = SETTINGS.get('manual_payments', {}).get(order_id)
+        msg = (f"🟡 <b>BINANCE AUTO DEPOSIT</b>\n━━━━━━━━━━━━━━━━━━━━\n"
+               f"💵 Exchange Rate: <b>1$ = {BINANCE_RATE} TK</b>\n"
+               f"Binance UID: <code>{BINANCE_UID}</code>\n\n"
+               f"1️⃣ Send any amount of <b>USDT</b> to the UID above.\n"
+               f"2️⃣ Paste your <b>Order ID (Transaction ID)</b> here after sending:")
         
-        if not order: return await query.answer("❌ Order not found.", show_alert=True)
-        if order['status'] != 'pending': return await query.answer(f"⚠️ Order already {order['status']}!", show_alert=True)
-            
-        if 'man_approve_' in action:
-            order['status'] = 'approved'
-            amount, target_id = order['amount'], order['user_id']
-            
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, db_update_balance, target_id, amount, f"Manual Binance Dep {order['trx_id']}")
-            save_settings()
-            
-            await query.answer("✅ Approved!")
-            try: await query.message.edit_caption(caption=(query.message.caption_html or "") + "\n\n✅ <b>APPROVED</b> by Admin", parse_mode='HTML')
-            except: pass
-            
-            try: await context.bot.send_message(chat_id=target_id, text=f"🎉 <b>PAYMENT APPROVED!</b>\n━━━━━━━━━━━━━━━━━━━━\nYour manual deposit of <b>{amount} TK</b> has been verified and added to your MySQL balance.", parse_mode='HTML')
-            except: pass
-        else:
-            order['status'] = 'rejected'
-            save_settings()
-            await query.answer("❌ Rejected!")
-            try: await query.message.edit_caption(caption=(query.message.caption_html or "") + "\n\n❌ <b>REJECTED</b> by Admin", parse_mode='HTML')
-            except: pass
-            try: await context.bot.send_message(chat_id=order['user_id'], text=f"❌ <b>PAYMENT REJECTED!</b>\n━━━━━━━━━━━━━━━━━━━━\nYour manual deposit for Order ID <code>{order['trx_id']}</code> was rejected.", parse_mode='HTML')
-            except: pass
+        try: await query.message.edit_text(msg, parse_mode='HTML', reply_markup=kb)
+        except: await context.bot.send_message(chat_id=user.id, text=msg, parse_mode='HTML', reply_markup=kb)
         return
         
     if action.startswith('pdec_a_') or action.startswith('pdec_r_'):
