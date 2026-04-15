@@ -25,24 +25,24 @@ from telegram.ext import (
     filters
 )
 
-# Disable SSL Warnings from console
+# Console varun SSL Warnings aksham kara
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- BOTS CONFIGURATION ---
 BOTS_CONFIG = {
-    # 1. Original Bot
+    # 1. Mool Bot
     "8223325004:AAEIIhDOSAOPmALWmwEHuYeaJpjlzKNGJ1k": {
         "name": "Ismailproxybot",
         "admins": [6616624640, 5473188537],
-        "settings_file": "local_settings.json",     # Keeps old data
-        "hotmail_file": "hotmail_stock.json"        # Keeps old stock
+        "settings_file": "local_settings.json",     # Juni mahiti thevate
+        "hotmail_file": "hotmail_stock.json"        # Juna stock thevate
     },
-    # 2. New Bot
+    # 2. Navin Bot
     "8761704776:AAH78IH29fhOztiOjyoAlvGFPib6RRjz6Mc": {
         "name": "Fasts_Proxy_BOT",
-        "admins": [7418021930, 6616624640, 5473188537], # Included old admins + new admin
-        "settings_file": "fasts_settings.json",     # New separate file
-        "hotmail_file": "fasts_hotmail_stock.json"  # New separate file
+        "admins": [7418021930, 6616624640, 5473188537], # June admins + navin admin samavisht kele
+        "settings_file": "fasts_settings.json",     # Navin swatantra file
+        "hotmail_file": "fasts_hotmail_stock.json"  # Navin swatantra file
     }
 }
 
@@ -94,7 +94,7 @@ def save_settings(file_path, data):
     with open(file_path, 'w') as f:
         json.dump(data, f, indent=4)
 
-# Initialize settings for all bots
+# Sarva bots sathi settings suru kara
 for tkn, conf in BOTS_CONFIG.items():
     GLOBAL_SETTINGS[tkn] = load_settings(conf['settings_file'])
 
@@ -274,7 +274,7 @@ async def monitor_payment(context: ContextTypes.DEFAULT_TYPE, order_id: str, use
                 f"🤖 Bot: <b>{bot_name}</b>\n"
                 f"👤 User ID: <code>{user_id}</code>\n"
                 f"💵 Amount: <b>{amount} TK</b>\n"
-                f"💳 Method: PipraPay\n"
+                f"💳 Method: Bkash, Nagod\n"
                 f"📅 Date: {datetime.datetime.now().strftime('%d-%m-%Y | %I:%M %p')}\n"
                 f"━━━━━━━━━━━━━━━━━━━━\n✅ Status: Added to MySQL"
             )
@@ -350,7 +350,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif text == '💳 Add Balance':
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("⚡ PipraPay (Auto Deposit)", callback_data="pay_piprapay")],
+                [InlineKeyboardButton("⚡ Bkash , Nagod (auto)", callback_data="pay_piprapay")],
                 [InlineKeyboardButton("🟡 Binance (Auto)", callback_data="pay_binance")],
                 [InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]
             ])
@@ -850,7 +850,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == 'trigger_add_balance':
         context.user_data['state'] = None
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⚡ PipraPay (Auto Deposit)", callback_data="pay_piprapay")],
+            [InlineKeyboardButton("⚡ Bkash , Nagod (auto)", callback_data="pay_piprapay")],
             [InlineKeyboardButton("🟡 Binance (Auto)", callback_data="pay_binance")],
             [InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]
         ])
@@ -862,7 +862,7 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == 'pay_piprapay':
         context.user_data['state'] = 'awaiting_deposit'
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel_action")]])
-        await query.message.edit_text("⚡ <b>PIPRAPAY AUTO-DEPOSIT</b>\n━━━━━━━━━━━━━━━━━━━━\n💰 How much TK do you want to add?\n\n<i>Please enter the amount below (Min 10):</i>", parse_mode='HTML', reply_markup=kb)
+        await query.message.edit_text("⚡ <b>BKASH, NAGOD AUTO-DEPOSIT</b>\n━━━━━━━━━━━━━━━━━━━━\n💰 How much TK do you want to add?\n\n<i>Please enter the amount below (Min 10):</i>", parse_mode='HTML', reply_markup=kb)
         return
         
     if action == 'pay_binance':
@@ -1000,7 +1000,7 @@ async def update_cookie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def main():
     apps = []
-    # Build applications for all bots in configuration
+    # Configuration madhil sarva bots sathi applications banva
     for token in BOTS_CONFIG.keys():
         app = ApplicationBuilder().token(token).build()
         app.add_handler(CommandHandler('start', start))
@@ -1011,7 +1011,7 @@ async def main():
         app.add_handler(CallbackQueryHandler(button_click))
         apps.append(app)
         
-    # Start all applications simultaneously
+    # Sarva applications ekach veli suru kara
     for app in apps:
         await app.initialize()
         await app.start()
@@ -1019,7 +1019,7 @@ async def main():
         
     print(f"🚀 Started {len(apps)} MySQL Connected Proxy Bots successfully!")
     
-    # Keep the script running
+    # Script chalu theva
     stop_event = asyncio.Event()
     await stop_event.wait()
 
