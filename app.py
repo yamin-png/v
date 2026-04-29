@@ -94,9 +94,17 @@ def save_settings(file_path, data):
     with open(file_path, 'w') as f:
         json.dump(data, f, indent=4)
 
-# Sarva bots sathi settings suru kara
+# Sarva bots sathi settings suru kara ani cookie sync kara
+shared_cookie = None
 for tkn, conf in BOTS_CONFIG.items():
     GLOBAL_SETTINGS[tkn] = load_settings(conf['settings_file'])
+    
+    # Auto-sync cookie from the first bot to all other bots
+    if shared_cookie is None:
+        shared_cookie = GLOBAL_SETTINGS[tkn].get('cookie')
+    else:
+        GLOBAL_SETTINGS[tkn]['cookie'] = shared_cookie
+        save_settings(conf['settings_file'], GLOBAL_SETTINGS[tkn])
 
 def load_hotmail_stock(file_path):
     if os.path.exists(file_path):
@@ -173,8 +181,9 @@ def verify_binance_payment(target_order_id):
 
 # --- PROXY API LOGIC ---
 def _sync_get_available_proxies(country_full_name, cookie_str):
-    url = "https://dichvusocks.net/api/socks/data"
-    params = {'auth': '', 'useType': '', 'country': country_full_name, 'region': '', 'city': '', 'blacklist': 'no', 'zipcode': '', 'Host': '', 'page': '1', 'limit': '200'}
+    # Updated API Endpoint: added /site/
+    url = "https://dichvusocks.net/api/site/socks/data"
+    params = {'auth': '', 'useType': '', 'country': country_full_name, 'region': '', 'city': '', 'blacklist': '', 'zipcode': '', 'Host': '', 'page': '1', 'limit': '20'}
     try:
         response = requests.get(url, headers=build_proxy_headers(cookie_str), params=params, timeout=10, verify=False)
         if response.status_code == 200:
@@ -192,8 +201,9 @@ def _sync_get_available_proxies(country_full_name, cookie_str):
         return [], str(e)
 
 def _sync_fetch_proxy_obj_random(country_full_name, region, cookie_str):
-    url = "https://dichvusocks.net/api/socks/data"
-    params = {'auth': '', 'useType': '', 'country': country_full_name, 'region': region, 'city': '', 'blacklist': 'no', 'zipcode': '', 'Host': '', 'page': '1', 'limit': '20'}
+    # Updated API Endpoint: added /site/
+    url = "https://dichvusocks.net/api/site/socks/data"
+    params = {'auth': '', 'useType': '', 'country': country_full_name, 'region': region, 'city': '', 'blacklist': '', 'zipcode': '', 'Host': '', 'page': '1', 'limit': '20'}
     try:
         response = requests.get(url, headers=build_proxy_headers(cookie_str), params=params, timeout=10, verify=False)
         if response.status_code == 200:
@@ -206,7 +216,8 @@ def _sync_fetch_proxy_obj_random(country_full_name, region, cookie_str):
         return None, str(e)
 
 def _sync_reveal_credentials(proxy_id, cookie_str):
-    url = "https://dichvusocks.net/api/socks/view"
+    # Updated API Endpoint: added /site/
+    url = "https://dichvusocks.net/api/site/socks/view"
     params = {'id': proxy_id}
     try:
         response = requests.get(url, headers=build_proxy_headers(cookie_str), params=params, timeout=10, verify=False)
@@ -989,13 +1000,16 @@ async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def update_cookie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     token = context.bot.token
     bot_conf = BOTS_CONFIG[token]
-    settings = GLOBAL_SETTINGS[token]
     if update.effective_user.id not in bot_conf['admins']: return
     try:
         new_cookie = update.message.text.split(None, 1)[1]
-        settings['cookie'] = new_cookie
-        save_settings(bot_conf['settings_file'], settings)
-        await update.message.reply_text(f"✅ Cookie Updated for <b>{bot_conf['name']}</b>!", parse_mode='HTML')
+        
+        # Update cookie for ALL bots simultaneously 
+        for tkn, conf in BOTS_CONFIG.items():
+            GLOBAL_SETTINGS[tkn]['cookie'] = new_cookie
+            save_settings(conf['settings_file'], GLOBAL_SETTINGS[tkn])
+            
+        await update.message.reply_text(f"✅ Cookie Updated globally for <b>ALL BOTS</b>!", parse_mode='HTML')
     except: await update.message.reply_text("Usage: <code>/new &lt;cookie&gt;</code>", parse_mode='HTML')
 
 async def main():
